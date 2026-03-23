@@ -1,11 +1,17 @@
 # opencode-cursorcli-a2a
 
-OpenCode カスタムプロバイダー。[cursor-agent-a2a](https://github.com/jeffkit/cursor-agent-a2a) を経由して Cursor AI を OpenCode から呼び出すプラグインです。
+OpenCode カスタムプロバイダー。Cursor CLI を A2A プロトコル経由で OpenCode から呼び出すプラグインです。
+
+## 特徴
+
+- **堅牢な実行環境**: `node_modules` への直接パッチに依存せず、内製 A2A サーバー（`dist/server.js`）を起動するため、`npm ci` や依存関係の更新後も安定して動作します。
+- **Thinking サポート**: Cursor CLI の `thinking`（思考プロセス）イベントをネイティブにサポートし、OpenCode のストリーム表示に反映します。
+- **自動検出**: ローカル環境の `cursor` コマンドを自動検出し、複雑な設定なしで動作します。
 
 ## 必要条件
 
-- Node.js 18 以上
-- [cursor-agent-a2a](https://github.com/jeffkit/cursor-agent-a2a) がインストール済み
+- Node.js 20 以上
+- Cursor CLI がインストール済み（`cursor` コマンドが PATH に通っていること）
 
 ## インストール
 
@@ -14,20 +20,11 @@ OpenCode カスタムプロバイダー。[cursor-agent-a2a](https://github.com/
 ```bash
 git clone <this-repo>
 cd opencode-cursorcli-a2a
-npm install        # cursor-agent-a2a も optionalDependencies として自動インストールされる
+npm install
 npm run build
 ```
 
-ビルド成功すると `dist/index.cjs` が生成されます。
-
-> **`cursor-agent-a2a` が既にグローバルインストール済みでも問題ありません。**
-> ローカル `node_modules/.bin` → `which` → グローバル の順に自動検出します。
-
-### グローバルインストールする場合（任意）
-
-```bash
-npm install -g cursor-agent-a2a
-```
+ビルド成功すると `dist/index.cjs`（プロバイダー）と `dist/server.js`（内製 A2A サーバー）が生成されます。
 
 ---
 
@@ -63,7 +60,7 @@ npm install -g cursor-agent-a2a
 }
 ```
 
-> **`autoStart: {}`** を設定すると、OpenCode から初めてリクエストが来たとき自動的に `cursor-agent-a2a` サーバーを起動します。
+> **`autoStart: {}`** を設定すると、OpenCode から初めてリクエストが来たとき自動的に内製 A2A サーバーを起動します。
 
 ### 詳細設定
 
@@ -154,8 +151,8 @@ auto, composer-2-fast, composer-2, composer-1.5, gpt-5.3-codex-low, gpt-5.3-code
 ```text
 OpenCode
   └─► Provider (doStream)
-        ├─ [1] autoStart が有効なら cursor-agent-a2a を await 起動
-        ├─ [2] POST /messages?stream=true  →  cursor-agent-a2a サーバー (port 4937)
+        ├─ [1] autoStart が有効なら 内製 A2A サーバー を await 起動
+        ├─ [2] POST /messages?stream=true  →  Internal Server (port 4937)
         └─ [3] SSE レスポンスを AI SDK ストリームパーツに変換して返却
 ```
 
