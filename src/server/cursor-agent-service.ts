@@ -20,6 +20,7 @@ export interface CursorAgentConfig {
     model?: string;
     sessionId?: string;
     apiKey?: string;
+    signal?: AbortSignal;
 }
 
 export interface CursorAgentEvent {
@@ -86,7 +87,7 @@ export async function executeCursorAgentStream(
         ];
 
         // Add model if specified
-        const model = config.model || process.env['CURSOR_DEFAULT_MODEL'] || 'sonnet-4.5';
+        const model = config.model || process.env['CURSOR_DEFAULT_MODEL'] || 'auto';
         args.push('--model', model);
 
         // Add session resume if sessionId is provided
@@ -110,8 +111,89 @@ export async function executeCursorAgentStream(
             stdio: ['pipe', 'pipe', 'pipe'],
         });
 
+        let sessionId: string | undefined;
+        let buffer = '';
+
+        const processLine = (line: string) => {
+            if (!line.trim()) return;
+            try {
+                const json = JSON.parse(line);
+                const timestamp = Date.now();
+
+                // Extract session ID
+                if (json.session_id && !sessionId) {
+                    sessionId = json.session_id;
+                }
+
+                // Map Cursor output to stream events
+                if (json.type === 'result') {
+                    // Fix: Stop emitting type: 'message' here to avoid duplicates
+                    onEvent({
+                        type: 'result',
+                        sessionId,
+                        timestamp,
+                        data: json,
+                    });
+                } else if (json.type === 'assistant' && json.message?.content) {
+                    for (const block of json.message.content) {
+                        if (block.type === 'text') {
+                            onEvent({
+                                type: 'message',
+                                content: block.text,
+                                sessionId,
+                                timestamp,
+                                data: json,
+                            });
+                        } else if (block.type === 'tool_use') {
+                            onEvent({
+                                type: 'tool_use',
+                                sessionId,
+                                timestamp,
+                                data: block,
+                            });
+                        }
+                    }
+                } else if (json.type === 'thinking') {
+                    // Native support for thinking events
+                    onEvent({
+                        type: 'thinking',
+                        subtype: json.subtype,
+                        text: json.text,
+                        sessionId,
+                        timestamp,
+                        data: json,
+                    });
+                }
+            } catch (parseError) {
+                // If JSON parsing fails, send as raw message
+                onEvent({
+                    type: 'message',
+                    content: line,
+                    sessionId,
+                    timestamp: Date.now(),
+                });
+            }
+        };
+
+        // Handle abort signal
+        const onAbort = () => {
+            child.kill('SIGTERM');
+            reject(new Error('Cursor agent aborted'));
+        };
+
+        if (config.signal) {
+            if (config.signal.aborted) {
+                onAbort();
+                return;
+            }
+            config.signal.addEventListener('abort', onAbort);
+        }
+
         // Set up timeout
         const timeoutId = setTimeout(() => {
+            if (config.signal) {
+                config.signal.removeEventListener('abort', onAbort);
+            }
             child.kill('SIGTERM');
             reject(new Error('Cursor agent command timed out'));
         }, timeout);
@@ -122,9 +204,6 @@ export async function executeCursorAgentStream(
             child.stdin.end();
         }
 
-        let sessionId: string | undefined;
-        let buffer = '';
-
         // Process stdout line by line
         child.stdout?.on('data', (data) => {
             buffer += data.toString();
@@ -132,72 +211,7 @@ export async function executeCursorAgentStream(
             buffer = lines.pop() || ''; // Keep incomplete line in buffer
 
             for (const line of lines) {
-                if (!line.trim()) continue;
-                try {
-                    const json = JSON.parse(line);
-                    const timestamp = Date.now();
-
-                    // Extract session ID
-                    if (json.session_id && !sessionId) {
-                        sessionId = json.session_id;
-                    }
-
-                    // Map Cursor output to stream events
-                    if (json.type === 'result') {
-                        if (json.result) {
-                            onEvent({
-                                type: 'message',
-                                content: json.result,
-                                sessionId,
-                                timestamp,
-                                data: json,
-                            });
-                        }
-                        onEvent({
-                            type: 'result',
-                            sessionId,
-                            timestamp,
-                            data: json,
-                        });
-                    } else if (json.type === 'assistant' && json.message?.content) {
-                        for (const block of json.message.content) {
-                            if (block.type === 'text') {
-                                onEvent({
-                                    type: 'message',
-                                    content: block.text,
-                                    sessionId,
-                                    timestamp,
-                                    data: json,
-                                });
-                            } else if (block.type === 'tool_use') {
-                                onEvent({
-                                    type: 'tool_use',
-                                    sessionId,
-                                    timestamp,
-                                    data: block,
-                                });
-                            }
-                        }
-                    } else if (json.type === 'thinking') {
-                        // Native support for thinking events
-                        onEvent({
-                            type: 'thinking',
-                            subtype: json.subtype,
-                            text: json.text,
-                            sessionId,
-                            timestamp,
-                            data: json,
-                        });
-                    }
-                } catch (parseError) {
-                    // If JSON parsing fails, send as raw message
-                    onEvent({
-                        type: 'message',
-                        content: line,
-                        sessionId,
-                        timestamp: Date.now(),
-                    });
-                }
+                processLine(line);
             }
         });
 
@@ -215,6 +229,16 @@ export async function executeCursorAgentStream(
         // Handle process completion
         child.on('close', (code) => {
             clearTimeout(timeoutId);
+            if (config.signal) {
+                config.signal.removeEventListener('abort', onAbort);
+            }
+
+            // Flush remaining buffer
+            if (buffer.trim()) {
+                processLine(buffer);
+                buffer = '';
+            }
+
             if (code === 0) {
                 resolve({ sessionId });
             } else {
@@ -224,6 +248,9 @@ export async function executeCursorAgentStream(
 
         child.on('error', (error) => {
             clearTimeout(timeoutId);
+            if (config.signal) {
+                config.signal.removeEventListener('abort', onAbort);
+            }
             reject(error);
         });
     });

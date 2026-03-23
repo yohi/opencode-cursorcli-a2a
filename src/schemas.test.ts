@@ -65,6 +65,44 @@ describe('A2AJsonRpcRequestSchema', () => {
         expect(req.params.contextId).toBe('ctx-1');
         expect(req.params.taskId).toBe('task-1');
     });
+
+    describe('refine rules for file/image', () => {
+        it('accepts file with fileWithBytes', () => {
+            const req = { ...validRequest };
+            req.params.message.parts = [{ kind: 'file', file: { name: 'test.ts', fileWithBytes: 'base64data' } }];
+            expect(() => A2AJsonRpcRequestSchema.parse(req)).not.toThrow();
+        });
+
+        it('accepts file with uri', () => {
+            const req = { ...validRequest };
+            req.params.message.parts = [{ kind: 'file', file: { name: 'test.ts', uri: 'file:///path' } }];
+            expect(() => A2AJsonRpcRequestSchema.parse(req)).not.toThrow();
+        });
+
+        it('rejects file with neither fileWithBytes nor uri', () => {
+            const req = { ...validRequest };
+            req.params.message.parts = [{ kind: 'file', file: { name: 'test.ts' } }];
+            expect(() => A2AJsonRpcRequestSchema.parse(req)).toThrow();
+        });
+
+        it('accepts image with bytes', () => {
+            const req = { ...validRequest };
+            req.params.message.parts = [{ kind: 'image', image: { mimeType: 'image/png', bytes: 'base64data' } }];
+            expect(() => A2AJsonRpcRequestSchema.parse(req)).not.toThrow();
+        });
+
+        it('accepts image with uri', () => {
+            const req = { ...validRequest };
+            req.params.message.parts = [{ kind: 'image', image: { uri: 'https://example.com/img.png' } }];
+            expect(() => A2AJsonRpcRequestSchema.parse(req)).not.toThrow();
+        });
+
+        it('rejects image with neither bytes nor uri', () => {
+            const req = { ...validRequest };
+            req.params.message.parts = [{ kind: 'image', image: { mimeType: 'image/png' } }];
+            expect(() => A2AJsonRpcRequestSchema.parse(req)).toThrow();
+        });
+    });
 });
 
 describe('RpcResponseSchema', () => {

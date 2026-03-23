@@ -7,10 +7,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Create non-root user
-RUN groupadd --gid 1000 node || true \
-    && useradd --uid 1000 --gid node --shell /bin/bash --create-home node || true
-
 WORKDIR /workspace
 
 # Set correct file permissions

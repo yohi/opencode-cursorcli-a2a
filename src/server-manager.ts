@@ -18,12 +18,26 @@ export interface AutoStartConfig {
     startupTimeoutMs?: number;
 }
 
-function probePort(port: number, host: string): Promise<boolean> {
+async function probePort(port: number, host: string): Promise<boolean> {
     return new Promise((resolve) => {
-        const sock = createConnection({ port, host });
-        sock.once('connect', () => { sock.destroy(); resolve(true); });
-        sock.once('error', () => resolve(false));
-        sock.setTimeout(300, () => { sock.destroy(); resolve(false); });
+        const url = `http://${host}:${port}/health`;
+        const timeoutMs = 500;
+        
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+        fetch(url, { signal: controller.signal })
+            .then(async (res) => {
+                if (!res.ok) {
+                    resolve(false);
+                    return;
+                }
+                const data = await res.json();
+                // Check for our specific service identifier
+                resolve(data && data.service === 'opencode-cursor-a2a-internal');
+            })
+            .catch(() => resolve(false))
+            .finally(() => clearTimeout(timeoutId));
     });
 }
 
@@ -52,7 +66,19 @@ export function resolveServerPath(overridePath?: string): string {
 
     // 1. Internal Server (dist/server.js)
     try {
-        const currentDir = path.dirname(fileURLToPath(import.meta.url));
+        let currentDir: string;
+        try {
+            // @ts-ignore: ESM-only property
+            if (typeof import.meta !== 'undefined' && import.meta.url) {
+                currentDir = path.dirname(fileURLToPath(import.meta.url));
+            } else {
+                // Fallback for CJS
+                currentDir = typeof __dirname !== 'undefined' ? __dirname : process.cwd();
+            }
+        } catch {
+            currentDir = process.cwd();
+        }
+
         const internalServer = path.resolve(currentDir, '..', 'dist', 'server.js');
         if (existsSync(internalServer)) return internalServer;
         
@@ -65,7 +91,17 @@ export function resolveServerPath(overridePath?: string): string {
 
     // 2. Local node_modules fallback
     try {
-        const currentDir = path.dirname(fileURLToPath(import.meta.url));
+        let currentDir: string;
+        try {
+            // @ts-ignore: ESM-only property
+            if (typeof import.meta !== 'undefined' && import.meta.url) {
+                currentDir = path.dirname(fileURLToPath(import.meta.url));
+            } else {
+                currentDir = typeof __dirname !== 'undefined' ? __dirname : process.cwd();
+            }
+        } catch {
+            currentDir = process.cwd();
+        }
         const localServer = path.resolve(currentDir, '..', 'node_modules', 'cursor-agent-a2a', 'dist', 'index.js');
         if (existsSync(localServer)) return localServer;
     } catch {
@@ -122,13 +158,16 @@ export class ServerManager {
             ...config.env,
         };
 
-        const args = serverPath.endsWith('.ts') ? ['--no-warnings', 'node_modules/tsx/dist/cli.mjs', serverPath] : [serverPath];
-        const cmd = 'node';
+        const args = serverPath.endsWith('.ts') 
+            ? ['tsx', serverPath] 
+            : [serverPath];
+        const cmd = serverPath.endsWith('.ts') ? 'npx' : 'node';
 
         const proc = spawn(cmd, args, {
             env,
             stdio: debug ? 'inherit' : 'ignore',
             detached: false,
+            shell: process.platform === 'win32', // Required for npx on Windows
         });
 
         const entry: ManagedServer = { proc, port, host, refCount: 1 };
@@ -142,10 +181,8 @@ export class ServerManager {
                 waitForPort(port, host, timeoutMs, pollMs),
                 new Promise<void>((_, reject) => {
                     proc.on('error', (err) => reject(new Error(`Server spawn error: ${err.message}`)));
-                    proc.once('exit', (code) => {
-                        if (code !== 0 && code !== null) {
-                            reject(new Error(`Server exited early with code ${code}`));
-                        }
+                    proc.once('exit', (code, signal) => {
+                        reject(new Error(`Server exited prematurely (code: ${code}, signal: ${signal})`));
                     });
                 }),
             ]);
