@@ -18,7 +18,7 @@ export interface AutoStartConfig {
     startupTimeoutMs?: number;
 }
 
-async function probePort(port: number, host: string): Promise<boolean> {
+export async function probePort(port: number, host: string): Promise<boolean> {
     return new Promise((resolve) => {
         const url = `http://${host}:${port}/health`;
         const timeoutMs = 500;
@@ -121,6 +121,7 @@ interface ManagedServer {
 export class ServerManager {
     private static instance: ServerManager | undefined;
     private servers = new Map<number, ManagedServer>();
+    private startingUp = new Map<number, Promise<void>>();
 
     private constructor() {}
 
@@ -138,6 +139,15 @@ export class ServerManager {
         config: AutoStartConfig,
         debug: boolean = false
     ): Promise<() => void> {
+        // 1. Check if it is already being started by another call
+        const ongoing = this.startingUp.get(port);
+        if (ongoing) {
+            await ongoing;
+            // After startup finishes, check again to get the release function
+            return this.ensureRunning(port, host, modelId, config, debug);
+        }
+
+        // 2. Check if already running (external or already managed)
         if (await probePort(port, host)) {
             return () => {}; // Already running
         }
@@ -148,48 +158,57 @@ export class ServerManager {
             return this.makeReleaseFn(port);
         }
 
-        // New server startup
-        const serverPath = resolveServerPath(config.serverPath);
-        const env: Record<string, string> = {
-            ...process.env as Record<string, string>,
-            PORT: String(port),
-            HOST: host,
-            CURSOR_DEFAULT_MODEL: modelId,
-            ...config.env,
-        };
+        // 3. Start new server startup
+        const startupPromise = (async () => {
+            const serverPath = resolveServerPath(config.serverPath);
+            const env: Record<string, string> = {
+                ...process.env as Record<string, string>,
+                PORT: String(port),
+                HOST: host,
+                CURSOR_DEFAULT_MODEL: modelId,
+                ...config.env,
+            };
 
-        const args = serverPath.endsWith('.ts') 
-            ? ['tsx', serverPath] 
-            : [serverPath];
-        const cmd = serverPath.endsWith('.ts') ? 'npx' : 'node';
+            const args = serverPath.endsWith('.ts') 
+                ? ['tsx', serverPath] 
+                : [serverPath];
+            const cmd = serverPath.endsWith('.ts') ? 'npx' : 'node';
 
-        const proc = spawn(cmd, args, {
-            env,
-            stdio: debug ? 'inherit' : 'ignore',
-            detached: false,
-            shell: process.platform === 'win32', // Required for npx on Windows
-        });
+            const proc = spawn(cmd, args, {
+                env,
+                stdio: debug ? 'inherit' : 'ignore',
+                detached: false,
+                shell: process.platform === 'win32', // Required for npx on Windows
+            });
 
-        const entry: ManagedServer = { proc, port, host, refCount: 1 };
-        this.servers.set(port, entry);
+            const entry: ManagedServer = { proc, port, host, refCount: 1 };
+            this.servers.set(port, entry);
 
-        const pollMs = config.pollIntervalMs ?? 200;
-        const timeoutMs = config.startupTimeoutMs ?? 15000;
+            const pollMs = config.pollIntervalMs ?? 200;
+            const timeoutMs = config.startupTimeoutMs ?? 15000;
 
+            try {
+                await Promise.race([
+                    waitForPort(port, host, timeoutMs, pollMs),
+                    new Promise<void>((_, reject) => {
+                        proc.on('error', (err) => reject(new Error(`Server spawn error: ${err.message}`)));
+                        proc.once('exit', (code, signal) => {
+                            reject(new Error(`Server exited prematurely (code: ${code}, signal: ${signal})`));
+                        });
+                    }),
+                ]);
+            } catch (err) {
+                proc.kill();
+                this.servers.delete(port);
+                throw err;
+            }
+        })();
+
+        this.startingUp.set(port, startupPromise);
         try {
-            await Promise.race([
-                waitForPort(port, host, timeoutMs, pollMs),
-                new Promise<void>((_, reject) => {
-                    proc.on('error', (err) => reject(new Error(`Server spawn error: ${err.message}`)));
-                    proc.once('exit', (code, signal) => {
-                        reject(new Error(`Server exited prematurely (code: ${code}, signal: ${signal})`));
-                    });
-                }),
-            ]);
-        } catch (err) {
-            proc.kill();
-            this.servers.delete(port);
-            throw err;
+            await startupPromise;
+        } finally {
+            this.startingUp.delete(port);
         }
 
         return this.makeReleaseFn(port);
