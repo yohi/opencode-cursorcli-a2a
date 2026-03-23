@@ -53,6 +53,8 @@ app.post('/:projectId/messages', authMiddleware, async (req, res) => {
     const { projectId } = req.params;
     const stream = req.query.stream === 'true' || req.headers.accept === 'text/event-stream';
 
+    console.log(`[A2A] Processing request for project ${projectId} (sessionId: ${sessionId || 'new'})`);
+
     if (!message) {
         return res.status(400).json({ error: 'Missing message' });
     }

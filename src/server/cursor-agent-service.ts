@@ -24,13 +24,14 @@ export interface CursorAgentConfig {
 }
 
 export interface CursorAgentEvent {
-    type: 'message' | 'tool_use' | 'thinking' | 'result' | 'error' | 'done';
+    type: 'message' | 'tool_use' | 'thinking' | 'result' | 'error' | 'done' | 'info' | 'warning';
     content?: string;
     subtype?: string;
     text?: string;
     sessionId?: string;
     timestamp: number;
     data?: any;
+    logLevel?: 'info' | 'warn' | 'error';
 }
 
 /**
@@ -48,7 +49,8 @@ export function findCursorCommand(): string {
         if (!p) continue;
         if (p === 'cursor') {
             try {
-                execSync('which cursor', { stdio: 'pipe' });
+                const checkCmd = process.platform === 'win32' ? 'where cursor' : 'which cursor';
+                execSync(checkCmd, { stdio: 'pipe' });
                 return p;
             } catch {
                 continue;
@@ -217,12 +219,27 @@ export async function executeCursorAgentStream(
 
         // Process stderr
         child.stderr?.on('data', (data) => {
-            const errorText = data.toString();
+            const stderrText = data.toString().trim();
+            if (!stderrText) return;
+
+            let type: 'info' | 'warning' | 'error' = 'info';
+            let logLevel: 'info' | 'warn' | 'error' = 'info';
+
+            const lowerText = stderrText.toLowerCase();
+            if (lowerText.includes('error') || lowerText.includes('fail')) {
+                type = 'error';
+                logLevel = 'error';
+            } else if (lowerText.includes('warn')) {
+                type = 'warning';
+                logLevel = 'warn';
+            }
+
             onEvent({
-                type: 'error',
-                content: errorText,
+                type,
+                content: stderrText,
                 sessionId,
                 timestamp: Date.now(),
+                logLevel,
             });
         });
 
