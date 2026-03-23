@@ -8,11 +8,13 @@
  * but with native support for "thinking" events and improved durability.
  */
 
-import { spawn } from 'node:child_process';
+import { spawn, exec } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { execSync } from 'node:child_process';
-import path from 'node:path';
 import process from 'node:process';
+import { promisify } from 'node:util';
+
+const execAsync = promisify(exec);
+let _cachedCursorCmd: string | null = null;
 
 export interface CursorAgentConfig {
     workspace?: string;
@@ -37,7 +39,11 @@ export interface CursorAgentEvent {
 /**
  * Finds the cursor command path.
  */
-export function findCursorCommand(): string {
+export async function findCursorCommand(): Promise<string> {
+    if (_cachedCursorCmd) {
+        return _cachedCursorCmd;
+    }
+
     const possiblePaths = [
         'cursor', // In PATH
         '/usr/local/bin/cursor',
@@ -50,17 +56,20 @@ export function findCursorCommand(): string {
         if (p === 'cursor') {
             try {
                 const checkCmd = process.platform === 'win32' ? 'where cursor' : 'which cursor';
-                execSync(checkCmd, { stdio: 'pipe' });
+                await execAsync(checkCmd);
+                _cachedCursorCmd = p;
                 return p;
             } catch {
                 continue;
             }
         } else if (existsSync(p)) {
+            _cachedCursorCmd = p;
             return p;
         }
     }
 
-    return 'cursor'; // Default to 'cursor' and let it fail if not found
+    _cachedCursorCmd = 'cursor'; // Default to 'cursor' and let it fail if not found
+    return _cachedCursorCmd;
 }
 
 /**
@@ -74,6 +83,9 @@ export async function executeCursorAgentStream(
 ): Promise<{ sessionId?: string }> {
     const workspace = config.workspace || process.cwd();
     const timeout = config.timeout || 600000; // 10 minutes default
+
+    // Find cursor command asynchronously
+    const cursorCmd = await findCursorCommand();
 
     return new Promise((resolve, reject) => {
         // Build command arguments
@@ -102,9 +114,6 @@ export async function executeCursorAgentStream(
             ...process.env,
             ...(config.apiKey && { CURSOR_API_KEY: config.apiKey }),
         };
-
-        // Find cursor command
-        const cursorCmd = findCursorCommand();
 
         // Spawn cursor process
         const child = spawn(cursorCmd, args, {
