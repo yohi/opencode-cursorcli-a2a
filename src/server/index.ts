@@ -82,7 +82,10 @@ app.post('/:projectId/messages', authMiddleware, async (req: express.Request, re
             res.end();
             return;
         } catch (error) {
-            if (controller.signal.aborted) return;
+            if (controller.signal.aborted) {
+                res.end();
+                return;
+            }
             const errorMessage = error instanceof Error ? error.message : String(error);
             res.write(`data: ${JSON.stringify({ type: 'error', error: errorMessage })}\n\n`);
             res.end();

@@ -9,14 +9,14 @@ import { ServerManager } from './server-manager.js';
 /**
  * Creates a new Cursor A2A provider instance.
  */
-export function createCursorA2AProvider(options: any = {}) {
+export function createCursorA2AProvider(_options: any = {}) {
     const manager = ServerManager.getInstance();
     
     return {
         id: 'opencode-cursorcli-a2a',
         name: 'CursorCLI (A2A)',
         
-        async generate(prompt: string, config: any = {}) {
+        async generate(prompt: string, _config: any = {}) {
             // Minimal implementation for now
             return { text: `Cursor A2A Response to: ${prompt}` };
         },

@@ -12,7 +12,7 @@ import { z } from 'zod';
 // ---------------------------------------------------------------------------
 export const ConfigSchema = z.object({
     host: z.string().default('127.0.0.1'),
-    port: z.number().default(4937),
+    port: z.number().min(1).max(65535).default(4937),
     protocol: z.enum(['http', 'https']).default('http'),
     token: z.string().optional(),
 });
@@ -231,6 +231,13 @@ export const CursorAgentStreamEventSchema = z.object({
     timestamp: z.number().default(() => Date.now()),
     data: z.any().optional(),
     logLevel: z.enum(['info', 'warn', 'error']).optional(),
+}).refine(data => {
+    if (data.type === 'text') return !!data.content;
+    if (data.type === 'error') return !!data.content || !!data.data;
+    return true;
+}, {
+    message: "Missing required fields for event type",
+    path: ["content"]
 });
 
 export type CursorAgentStreamEvent = z.infer<typeof CursorAgentStreamEventSchema>;
