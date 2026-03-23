@@ -139,65 +139,91 @@ export class ServerManager {
         config: AutoStartConfig,
         debug: boolean = false
     ): Promise<() => void> {
-        // 1. Check if it is already being started by another call
-        const ongoing = this.startingUp.get(port);
-        if (ongoing) {
-            await ongoing;
-            // After startup finishes, check again to get the release function
-            return this.ensureRunning(port, host, modelId, config, debug);
-        }
-
-        // 2. Check if already running (external or already managed)
-        if (await probePort(port, host)) {
-            return () => {}; // Already running
-        }
-
+        // 1. Check if already managed
         const existing = this.servers.get(port);
         if (existing) {
             existing.refCount++;
             return this.makeReleaseFn(port);
         }
 
-        // 3. Start new server startup
+        // 2. Check if it is already being started by another call
+        const ongoing = this.startingUp.get(port);
+        if (ongoing) {
+            await ongoing;
+            // After startup finishes, check again (it might be managed now)
+            return this.ensureRunning(port, host, modelId, config, debug);
+        }
+
+        // 3. Start the startup/probe process
         const startupPromise = (async () => {
+            // Check if already running (external)
+            if (await probePort(port, host)) {
+                return;
+            }
+
             const serverPath = resolveServerPath(config.serverPath);
             const env: Record<string, string> = {
-                ...process.env as Record<string, string>,
+                ...(process.env as Record<string, string>),
                 PORT: String(port),
                 HOST: host,
                 CURSOR_DEFAULT_MODEL: modelId,
                 ...config.env,
             };
 
-            const args = serverPath.endsWith('.ts') 
-                ? ['tsx', serverPath] 
-                : [serverPath];
+            const args = serverPath.endsWith('.ts') ? ['tsx', serverPath] : [serverPath];
             const cmd = serverPath.endsWith('.ts') ? 'npx' : 'node';
 
             const proc = spawn(cmd, args, {
                 env,
                 stdio: debug ? 'inherit' : 'ignore',
                 detached: false,
-                shell: process.platform === 'win32', // Required for npx on Windows
+                shell: process.platform === 'win32',
             });
 
-            const entry: ManagedServer = { proc, port, host, refCount: 1 };
+            const entry: ManagedServer = { proc, port, host, refCount: 0 }; // Will be incremented by the outer ensureRunning
             this.servers.set(port, entry);
+
+            // Stability: Remove from servers if it exits unexpectedly
+            const cleanupExit = () => {
+                if (this.servers.get(port)?.proc === proc) {
+                    this.servers.delete(port);
+                }
+            };
+            proc.once('exit', cleanupExit);
 
             const pollMs = config.pollIntervalMs ?? 200;
             const timeoutMs = config.startupTimeoutMs ?? 15000;
 
             try {
-                await Promise.race([
-                    waitForPort(port, host, timeoutMs, pollMs),
-                    new Promise<void>((_, reject) => {
-                        proc.on('error', (err) => reject(new Error(`Server spawn error: ${err.message}`)));
-                        proc.once('exit', (code, signal) => {
-                            reject(new Error(`Server exited prematurely (code: ${code}, signal: ${signal})`));
-                        });
-                    }),
-                ]);
+                await new Promise<void>((resolve, reject) => {
+                    const timeoutId = setTimeout(() => {
+                        done(new Error(`[ServerManager] Server did not become ready on ${host}:${port} within ${timeoutMs}ms`));
+                    }, timeoutMs);
+
+                    const pollInterval = setInterval(async () => {
+                        if (await probePort(port, host)) {
+                            done();
+                        }
+                    }, pollMs);
+
+                    const onError = (err: Error) => done(new Error(`Server spawn error: ${err.message}`));
+                    const onExit = (code: number | null, signal: string | null) => 
+                        done(new Error(`Server exited prematurely (code: ${code}, signal: ${signal})`));
+
+                    proc.on('error', onError);
+                    proc.once('exit', onExit);
+
+                    function done(err?: Error) {
+                        clearTimeout(timeoutId);
+                        clearInterval(pollInterval);
+                        proc.removeListener('error', onError);
+                        proc.removeListener('exit', onExit);
+                        if (err) reject(err);
+                        else resolve();
+                    }
+                });
             } catch (err) {
+                proc.removeListener('exit', cleanupExit);
                 proc.kill();
                 this.servers.delete(port);
                 throw err;
@@ -211,7 +237,19 @@ export class ServerManager {
             this.startingUp.delete(port);
         }
 
-        return this.makeReleaseFn(port);
+        // 4. Final check and return release function
+        const managed = this.servers.get(port);
+        if (managed) {
+            managed.refCount++;
+            return this.makeReleaseFn(port);
+        }
+
+        // If it was an external server
+        if (await probePort(port, host)) {
+            return () => {};
+        }
+
+        throw new Error(`[ServerManager] Failed to ensure server is running on ${host}:${port}`);
     }
 
     private makeReleaseFn(port: number): () => void {

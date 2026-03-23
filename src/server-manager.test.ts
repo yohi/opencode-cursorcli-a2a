@@ -12,7 +12,7 @@ vi.mock('node:fs', () => ({
     existsSync: vi.fn(),
 }));
 
-describe('ServerManager Race Condition', () => {
+describe('ServerManager', () => {
     let sm: ServerManager;
     let originalFetch: typeof fetch;
 
@@ -59,24 +59,106 @@ describe('ServerManager Race Condition', () => {
         const mockProc = {
             on: vi.fn(),
             once: vi.fn(),
+            off: vi.fn(),
+            removeListener: vi.fn(),
             kill: vi.fn(),
             unref: vi.fn(),
         };
         (spawn as any).mockReturnValue(mockProc);
 
         // Trigger two concurrent calls to ensureRunning
-        // We use a small delay in fetch to ensure they both reach the 'not running' state
         const p1 = sm.ensureRunning(port, host, modelId, config);
         const p2 = sm.ensureRunning(port, host, modelId, config);
 
         const [release1, release2] = await Promise.all([p1, p2]);
 
-        // Expect spawn to have been called only once if race condition is fixed.
-        // In the current buggy implementation, it should be called twice.
+        // Expect spawn to have been called only once.
         expect(spawn).toHaveBeenCalledTimes(1);
 
         // Clean up
         release1();
         release2();
+    });
+
+    it('should increment refCount when server is already running and managed', async () => {
+        const port = 4938;
+        const host = '127.0.0.1';
+        const modelId = 'auto';
+        const config = { pollIntervalMs: 10, startupTimeoutMs: 1000 };
+
+        global.fetch = vi.fn()
+            .mockResolvedValueOnce({ ok: false })
+            .mockResolvedValue({
+                ok: true,
+                json: async () => ({ service: 'opencode-cursor-a2a-internal' })
+            }) as any;
+
+        const mockProc = {
+            on: vi.fn(),
+            once: vi.fn(),
+            off: vi.fn(),
+            removeListener: vi.fn(),
+            kill: vi.fn(),
+            unref: vi.fn(),
+        };
+        (spawn as any).mockReturnValue(mockProc);
+
+        const release1 = await sm.ensureRunning(port, host, modelId, config);
+        expect(spawn).toHaveBeenCalledTimes(1);
+
+        const release2 = await sm.ensureRunning(port, host, modelId, config);
+        
+        release1();
+        expect(mockProc.kill).not.toHaveBeenCalled();
+
+        release2();
+        expect(mockProc.kill).toHaveBeenCalledTimes(1);
+    });
+
+    it('should remove server from managed list on exit', async () => {
+        const port = 4939;
+        const host = '127.0.0.1';
+        const modelId = 'auto';
+        const config = { pollIntervalMs: 10, startupTimeoutMs: 1000 };
+
+        const exitHandlers: Set<(code: number | null, signal: string | null) => void> = new Set();
+        const mockProc = {
+            on: vi.fn(),
+            once: vi.fn().mockImplementation((event, handler) => {
+                if (event === 'exit') exitHandlers.add(handler);
+            }),
+            off: vi.fn().mockImplementation((event, handler) => {
+                if (event === 'exit') exitHandlers.delete(handler);
+            }),
+            removeListener: vi.fn().mockImplementation((event, handler) => {
+                if (event === 'exit') exitHandlers.delete(handler);
+            }),
+            kill: vi.fn(),
+            unref: vi.fn(),
+        };
+        (spawn as any).mockReturnValue(mockProc);
+
+        global.fetch = vi.fn()
+            .mockResolvedValueOnce({ ok: false })
+            .mockResolvedValue({
+                ok: true,
+                json: async () => ({ service: 'opencode-cursor-a2a-internal' })
+            }) as any;
+
+        await sm.ensureRunning(port, host, modelId, config);
+        
+        // Simulate exit
+        const handlers = Array.from(exitHandlers);
+        handlers.forEach(h => h(1, null));
+
+        (spawn as any).mockClear();
+        global.fetch = vi.fn()
+            .mockResolvedValueOnce({ ok: false })
+            .mockResolvedValue({
+                ok: true,
+                json: async () => ({ service: 'opencode-cursor-a2a-internal' })
+            }) as any;
+        await sm.ensureRunning(port, host, modelId, config);
+        expect(spawn).toHaveBeenCalledTimes(1);
     });
 });
