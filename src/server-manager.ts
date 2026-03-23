@@ -6,7 +6,6 @@
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
-import { createConnection } from 'node:net';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -32,27 +31,12 @@ export async function probePort(port: number, host: string): Promise<boolean> {
                     resolve(false);
                     return;
                 }
-                const data = await res.json();
+                const data = await res.json() as { service?: string };
                 // Check for our specific service identifier
-                resolve(data && data.service === 'opencode-cursor-a2a-internal');
+                resolve(!!(data && data.service === 'opencode-cursor-a2a-internal'));
             })
             .catch(() => resolve(false))
             .finally(() => clearTimeout(timeoutId));
-    });
-}
-
-function waitForPort(port: number, host: string, timeoutMs: number, pollMs: number): Promise<void> {
-    return new Promise((resolve, reject) => {
-        const deadline = Date.now() + timeoutMs;
-        const poll = async () => {
-            if (await probePort(port, host)) { resolve(); return; }
-            if (Date.now() >= deadline) {
-                reject(new Error(`[ServerManager] Server did not become ready on ${host}:${port} within ${timeoutMs}ms`));
-                return;
-            }
-            setTimeout(poll, pollMs);
-        };
-        poll();
     });
 }
 
