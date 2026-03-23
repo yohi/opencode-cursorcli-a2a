@@ -8,6 +8,7 @@
 import express from 'express';
 import cors from 'cors';
 import { executeCursorAgentStream } from './cursor-agent-service.js';
+import { logger } from '../utils/logger.js';
 
 const app = express();
 const PORT = Number(process.env['PORT']) || 4937;
@@ -53,7 +54,7 @@ app.post('/:projectId/messages', authMiddleware, async (req: express.Request, re
     const { projectId } = req.params;
     const stream = req.query.stream === 'true' || req.headers.accept === 'text/event-stream';
 
-    console.log(`[A2A] Processing request for project ${projectId} (sessionId: ${sessionId || 'new'})`);
+    logger.info('Processing request', { projectId, sessionId: sessionId || 'new', stream });
 
     if (!message) {
         return res.status(400).json({ error: 'Missing message' });
@@ -116,5 +117,5 @@ app.post('/:projectId/messages', authMiddleware, async (req: express.Request, re
 
 // Start server
 app.listen(PORT, HOST, () => {
-    console.log(`🚀 Internal Cursor A2A Server running on http://${HOST}:${PORT}`);
+    logger.child({ host: HOST, port: PORT }).info('Internal Cursor A2A Server started');
 });

@@ -16,6 +16,14 @@ import { promisify } from 'node:util';
 const execAsync = promisify(exec);
 let _cachedCursorCmd: string | null = null;
 
+/**
+ * Reset the cached cursor command path.
+ * Primarily for testing purposes.
+ */
+export function __resetCachedCursorCmd(): void {
+    _cachedCursorCmd = null;
+}
+
 export interface CursorAgentConfig {
     workspace?: string;
     timeout?: number;

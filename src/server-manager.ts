@@ -19,7 +19,11 @@ export interface AutoStartConfig {
 
 export async function probePort(port: number, host: string): Promise<boolean> {
     return new Promise((resolve) => {
-        const url = `http://${host}:${port}/health`;
+        // Normalize IPv6 literals
+        const normalizedHost = (host.includes(':') && !host.startsWith('[') && !host.endsWith(']'))
+            ? `[${host}]`
+            : host;
+        const url = `http://${normalizedHost}:${port}/health`;
         const timeoutMs = 500;
         
         const controller = new AbortController();
@@ -104,8 +108,8 @@ interface ManagedServer {
 
 export class ServerManager {
     private static instance: ServerManager | undefined;
-    private servers = new Map<number, ManagedServer>();
-    private startingUp = new Map<number, Promise<void>>();
+    private servers = new Map<string, ManagedServer>();
+    private startingUp = new Map<string, Promise<void>>();
 
     private constructor() {}
 
@@ -116,6 +120,10 @@ export class ServerManager {
         return ServerManager.instance;
     }
 
+    private getKey(port: number, host: string): string {
+        return `${host}:${port}`;
+    }
+
     async ensureRunning(
         port: number,
         host: string,
@@ -123,15 +131,17 @@ export class ServerManager {
         config: AutoStartConfig,
         debug: boolean = false
     ): Promise<() => void> {
+        const key = this.getKey(port, host);
+
         // 1. Check if already managed
-        const existing = this.servers.get(port);
+        const existing = this.servers.get(key);
         if (existing) {
             existing.refCount++;
-            return this.makeReleaseFn(port);
+            return this.makeReleaseFn(key);
         }
 
         // 2. Check if it is already being started by another call
-        const ongoing = this.startingUp.get(port);
+        const ongoing = this.startingUp.get(key);
         if (ongoing) {
             await ongoing;
             // After startup finishes, check again (it might be managed now)
@@ -163,17 +173,6 @@ export class ServerManager {
                 detached: false,
                 shell: process.platform === 'win32',
             });
-
-            const entry: ManagedServer = { proc, port, host, refCount: 0 }; // Will be incremented by the outer ensureRunning
-            this.servers.set(port, entry);
-
-            // Stability: Remove from servers if it exits unexpectedly
-            const cleanupExit = () => {
-                if (this.servers.get(port)?.proc === proc) {
-                    this.servers.delete(port);
-                }
-            };
-            proc.once('exit', cleanupExit);
 
             const pollMs = config.pollIntervalMs ?? 200;
             const timeoutMs = config.startupTimeoutMs ?? 15000;
@@ -207,25 +206,35 @@ export class ServerManager {
                     }
                 });
             } catch (err) {
-                proc.removeListener('exit', cleanupExit);
                 proc.kill();
-                this.servers.delete(port);
                 throw err;
             }
+
+            // Registration only after successful readiness wait
+            const entry: ManagedServer = { proc, port, host, refCount: 0 }; 
+            this.servers.set(key, entry);
+
+            // Stability: Remove from servers if it exits unexpectedly after startup
+            const cleanupExit = () => {
+                if (this.servers.get(key)?.proc === proc) {
+                    this.servers.delete(key);
+                }
+            };
+            proc.once('exit', cleanupExit);
         })();
 
-        this.startingUp.set(port, startupPromise);
+        this.startingUp.set(key, startupPromise);
         try {
             await startupPromise;
         } finally {
-            this.startingUp.delete(port);
+            this.startingUp.delete(key);
         }
 
         // 4. Final check and return release function
-        const managed = this.servers.get(port);
+        const managed = this.servers.get(key);
         if (managed) {
             managed.refCount++;
-            return this.makeReleaseFn(port);
+            return this.makeReleaseFn(key);
         }
 
         // If it was an external server
@@ -236,14 +245,14 @@ export class ServerManager {
         throw new Error(`[ServerManager] Failed to ensure server is running on ${host}:${port}`);
     }
 
-    private makeReleaseFn(port: number): () => void {
+    private makeReleaseFn(key: string): () => void {
         return () => {
-            const entry = this.servers.get(port);
+            const entry = this.servers.get(key);
             if (!entry) return;
             entry.refCount--;
             if (entry.refCount <= 0) {
                 entry.proc.kill();
-                this.servers.delete(port);
+                this.servers.delete(key);
             }
         };
     }

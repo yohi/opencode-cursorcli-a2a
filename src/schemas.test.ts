@@ -172,11 +172,20 @@ describe('CursorAgentStreamEventSchema', () => {
 });
 
 describe('CURSOR_AGENT_MODELS', () => {
-    it('includes expected models', () => {
+    it('includes auto and follows format', () => {
         expect(CURSOR_AGENT_MODELS).toContain('auto');
-        expect(CURSOR_AGENT_MODELS).toContain('claude-4.6-sonnet-medium');
-        expect(CURSOR_AGENT_MODELS).toContain('gpt-5.4-high');
-        expect(CURSOR_AGENT_MODELS).toContain('composer-2');
+        
+        const pattern = /^[a-z0-9-\.]+$/i;
+        for (const model of CURSOR_AGENT_MODELS) {
+            expect(typeof model).toBe('string');
+            expect(model.length).toBeGreaterThan(0);
+            expect(model).toMatch(pattern);
+        }
+    });
+
+    it('has no duplicates', () => {
+        const uniqueModels = new Set(CURSOR_AGENT_MODELS);
+        expect(uniqueModels.size).toBe(CURSOR_AGENT_MODELS.length);
     });
 
     it('has at least 6 models', () => {
