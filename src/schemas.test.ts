@@ -1,6 +1,6 @@
 // src/schemas.test.ts
 import { describe, it, expect } from 'vitest';
-import { ConfigSchema, A2AJsonRpcRequestSchema, RpcResponseSchema, CURSOR_AGENT_MODELS } from './schemas';
+import { ConfigSchema, A2AJsonRpcRequestSchema, RpcResponseSchema, CURSOR_AGENT_MODELS, CursorAgentStreamEventSchema } from './schemas';
 
 describe('ConfigSchema', () => {
     it('uses defaults for missing fields', () => {
@@ -95,6 +95,41 @@ describe('RpcResponseSchema', () => {
         };
         const result = RpcResponseSchema.parse(response);
         expect('error' in result).toBe(true);
+    });
+});
+
+describe('CursorAgentStreamEventSchema', () => {
+    it('validates a correct text event', () => {
+        const event = { type: 'text', content: 'Hello' };
+        const result = CursorAgentStreamEventSchema.parse(event);
+        expect(result.type).toBe('text');
+        if (result.type === 'text') {
+            expect(result.content).toBe('Hello');
+        }
+    });
+
+    it('validates a thinking event', () => {
+        const event = { type: 'thinking', text: 'Hmm...', subtype: 'searching' };
+        const result = CursorAgentStreamEventSchema.parse(event);
+        expect(result.type).toBe('thinking');
+        if (result.type === 'thinking') {
+            expect(result.text).toBe('Hmm...');
+        }
+    });
+
+    it('rejects text event missing content', () => {
+        const event = { type: 'text' };
+        expect(() => CursorAgentStreamEventSchema.parse(event)).toThrow();
+    });
+
+    it('rejects error event missing message', () => {
+        const event = { type: 'error' };
+        expect(() => CursorAgentStreamEventSchema.parse(event)).toThrow();
+    });
+
+    it('rejects unknown event type', () => {
+        const event = { type: 'unknown_type', foo: 'bar' };
+        expect(() => CursorAgentStreamEventSchema.parse(event)).toThrow();
     });
 });
 

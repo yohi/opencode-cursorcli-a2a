@@ -49,7 +49,7 @@ npm install -g cursor-agent-a2a
   // 2. プロバイダーの詳細設定
   "provider": {
     "opencode-cursorcli-a2a": {
-      "npm": "file:///absolute/path/to/opencode-cursorcli-a2a/dist/index.js",
+      "npm": "file:///absolute/path/to/opencode-cursorcli-a2a/dist/index.cjs",
       "options": {
         "port": 4937,
         "autoStart": {}
@@ -75,7 +75,7 @@ npm install -g cursor-agent-a2a
   ],
   "provider": {
     "opencode-cursorcli-a2a": {
-      "npm": "file:///absolute/path/to/opencode-cursorcli-a2a/dist/index.js",
+      "npm": "file:///absolute/path/to/opencode-cursorcli-a2a/dist/index.cjs",
       "options": {
         // サーバー接続先
         "host": "127.0.0.1",
@@ -151,7 +151,7 @@ auto, composer-2-fast, composer-2, composer-1.5, gpt-5.3-codex-low, gpt-5.3-code
 
 ## 動作の仕組み
 
-```
+```text
 OpenCode
   └─► Provider (doStream)
         ├─ [1] autoStart が有効なら cursor-agent-a2a を await 起動

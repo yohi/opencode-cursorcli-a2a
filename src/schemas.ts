@@ -235,13 +235,13 @@ export const CursorAgentMessageRequestSchema = z.object({
 export type CursorAgentMessageRequest = z.infer<typeof CursorAgentMessageRequestSchema>;
 
 /** SSE ストリームイベント (POST /messages?stream=true) */
-export const CursorAgentStreamEventSchema = z.union([
+export const CursorAgentStreamEventSchema = z.discriminatedUnion('type', [
     z.object({ type: z.literal('text'), content: z.string() }),
+    z.object({ type: z.literal('thinking'), text: z.string().optional(), subtype: z.string().optional() }),
     z.object({ type: z.literal('complete'), sessionId: z.string().optional(), metadata: z.record(z.unknown()).optional() }),
     z.object({ type: z.literal('error'), message: z.string(), code: z.number().optional() }),
     z.object({ type: z.literal('tool_call'), name: z.string(), arguments: z.record(z.unknown()).optional(), callId: z.string().optional() }),
     z.object({ type: z.literal('tool_result'), callId: z.string().optional(), result: z.unknown() }),
-    z.object({ type: z.string() }).passthrough(),
 ]);
 
 export type CursorAgentStreamEvent = z.infer<typeof CursorAgentStreamEventSchema>;

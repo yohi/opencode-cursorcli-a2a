@@ -16,10 +16,10 @@ WORKDIR /workspace
 # Set correct file permissions
 RUN chown -R node:node /workspace
 
-USER node
-
 # Upgrade npm to latest
 RUN npm install -g npm@latest
+
+USER node
 
 # Default shell
 SHELL ["/bin/bash", "-c"]

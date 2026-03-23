@@ -2,21 +2,37 @@ const fs = require('fs');
 const path = require('path');
 
 const targetPath = path.resolve(__dirname, 'node_modules', 'cursor-agent-a2a', 'dist', 'services', 'cursorAgentService.js');
+const backupPath = `${targetPath}.bak`;
 
-if (fs.existsSync(targetPath)) {
-    let content = fs.readFileSync(targetPath, 'utf8');
+function patch() {
+    if (!fs.existsSync(targetPath)) {
+        console.log('[patch-cursor-agent] cursor-agent-a2a not found, skipping patch.');
+        return;
+    }
 
-    // Check if we need to apply the patch for missing 'thinking' event forwards
-    if (content.includes("else if (json.type === 'assistant' && json.message?.content)") && 
-        !content.includes("else if (json.type === 'thinking') {")) {
+    try {
+        let content = fs.readFileSync(targetPath, 'utf8');
+
+        // Check if patch is already applied
+        if (content.includes("else if (json.type === 'thinking') {")) {
+            console.log('[patch-cursor-agent] Patch already applied.');
+            return;
+        }
+
+        const assistantBlockPattern = /else if\s*\(json\.type === 'assistant' && json\.message\?\.content\)\s*\{[\s\S]*?\}\s*}/;
+        const match = content.match(assistantBlockPattern);
+
+        if (!match) {
+            console.warn('[patch-cursor-agent] Target code not found. Could not find assistant message block pattern.');
+            return;
+        }
+
+        const index = match.index;
+        const replaceTarget = match[0];
         
         console.log('[patch-cursor-agent] Patching cursor-agent-a2a to support "thinking" stream events...');
         
-        const replaceTarget = `                        }
-                    }`;
-                    
-        const replacement = `                        }
-                    }
+        const replacement = `${replaceTarget}
                     else if (json.type === 'thinking') {
                         onEvent({
                             type: 'thinking',
@@ -27,21 +43,25 @@ if (fs.existsSync(targetPath)) {
                             data: json,
                         });
                     }`;
-        
-        // Find the index of the first occurrence in the assistant block to target accurately
-        const index = content.indexOf("else if (json.type === 'assistant' && json.message?.content)");
-        if (index !== -1) {
-            const blockEndIndex = content.indexOf(replaceTarget, index);
-            if (blockEndIndex !== -1) {
-                content = content.slice(0, blockEndIndex) + replacement + content.slice(blockEndIndex + replaceTarget.length);
-                fs.writeFileSync(targetPath, content, 'utf8');
-                console.log('[patch-cursor-agent] Patch applied successfully.');
+
+        // Create backup
+        fs.copyFileSync(targetPath, backupPath);
+
+        try {
+            const newContent = content.slice(0, index) + replacement + content.slice(index + replaceTarget.length);
+            fs.writeFileSync(targetPath, newContent, 'utf8');
+            console.log('[patch-cursor-agent] Patch applied successfully.');
+        } catch (writeError) {
+            console.error(`[patch-cursor-agent] Failed to write patched content: ${writeError.message}`);
+            if (fs.existsSync(backupPath)) {
+                fs.copyFileSync(backupPath, targetPath);
+                console.log('[patch-cursor-agent] Restored from backup.');
             }
+            throw writeError;
         }
-    } else {
-        console.log('[patch-cursor-agent] Patch already applied or target code not found.');
+    } catch (err) {
+        console.error(`[patch-cursor-agent] Critical error during patching: ${err.message}`);
     }
-} else {
-    // Optional dependency might not be installed, ignore.
-    console.log('[patch-cursor-agent] cursor-agent-a2a not found, skipping patch.');
 }
+
+patch();
