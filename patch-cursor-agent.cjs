@@ -19,7 +19,10 @@ function patch() {
             return;
         }
 
-        const assistantBlockPattern = /else if\s*\(json\.type === 'assistant' && json\.message\?\.content\)\s*\{[\s\S]*?\}\s*}/;
+        // Match the specific assistant message block that calls onEvent.
+        // Using a more specific pattern that includes 'onEvent' and 'content: block.text' 
+        // to avoid ambiguous matches.
+        const assistantBlockPattern = /else if\s*\(json\.type === 'assistant' && json\.message\?\.content\)\s*\{[\s\S]*?onEvent\(\{[\s\S]*?type: 'message',[\s\S]*?content: block\.text,[\s\S]*?\}\);\s*\}\s*\}/;
         const match = content.match(assistantBlockPattern);
 
         if (!match) {
