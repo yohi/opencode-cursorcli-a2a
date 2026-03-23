@@ -1,0 +1,178 @@
+# opencode-cursorcli-a2a
+
+OpenCode カスタムプロバイダー。[cursor-agent-a2a](https://github.com/jeffkit/cursor-agent-a2a) を経由して Cursor AI を OpenCode から呼び出すプラグインです。
+
+## 必要条件
+
+- Node.js 18 以上
+- [cursor-agent-a2a](https://github.com/jeffkit/cursor-agent-a2a) がインストール済み
+
+## インストール
+
+### 1. このプラグインをセットアップ
+
+```bash
+git clone <this-repo>
+cd opencode-cursorcli-a2a
+npm install        # cursor-agent-a2a も optionalDependencies として自動インストールされる
+npm run build
+```
+
+ビルド成功すると `dist/index.cjs` が生成されます。
+
+> **`cursor-agent-a2a` が既にグローバルインストール済みでも問題ありません。**
+> ローカル `node_modules/.bin` → `which` → グローバル の順に自動検出します。
+
+### グローバルインストールする場合（任意）
+
+```bash
+npm install -g cursor-agent-a2a
+```
+
+---
+
+## OpenCode の設定
+
+`~/.config/opencode/opencode.jsonc` （またはプロジェクトルートの `.opencode/opencode.jsonc`）を編集します。
+
+このプロバイダーを有効にするには、**① `plugin` 配列への登録** と **② `provider` オブジェクトへの設定** の両方が必要です。
+
+### 基本設定（最小構成）
+
+```jsonc
+{
+  "$schema": "https://opencode.ai/config.schema.json",
+  // 1. プラグインの登録
+  "plugin": [
+    "opencode-cursorcli-a2a-provider"
+  ],
+  // 2. プロバイダーの詳細設定
+  "provider": {
+    "opencode-cursorcli-a2a": {
+      "npm": "file:///absolute/path/to/opencode-cursorcli-a2a/dist/index.js",
+      "options": {
+        "port": 4937,
+        "autoStart": {}
+      }
+    }
+  },
+  // 3. 利用モデルの登録
+  "models": {
+    "opencode-cursorcli-a2a/claude-4.6-sonnet-medium": {}
+  }
+}
+```
+
+> **`autoStart: {}`** を設定すると、OpenCode から初めてリクエストが来たとき自動的に `cursor-agent-a2a` サーバーを起動します。
+
+### 詳細設定
+
+```jsonc
+{
+  "$schema": "https://opencode.ai/config.schema.json",
+  "plugin": [
+    "opencode-cursorcli-a2a-provider"
+  ],
+  "provider": {
+    "opencode-cursorcli-a2a": {
+      "npm": "file:///absolute/path/to/opencode-cursorcli-a2a/dist/index.js",
+      "options": {
+        // サーバー接続先
+        "host": "127.0.0.1",
+        "port": 4937,
+
+        // cursor-agent-a2a に渡す Cursor モデル名（最高優先度）
+        // 省略するとサーバー側の CURSOR_DEFAULT_MODEL → "auto" を使用
+        "cursorModel": "auto",
+
+        // CursorAgent が操作するワークスペースパス（省略時は process.cwd()）
+        "workspace": "/path/to/your/project",
+
+        // 自動起動設定（サーバーが未起動の場合に自動で cursor-agent-a2a を起動）
+        "autoStart": {
+          // serverPath は省略可（グローバル npm から自動検出）
+          // "serverPath": "/usr/local/bin/cursor-agent-a2a",
+
+          // 起動タイムアウト（ms、デフォルト: 15000）
+          "startupTimeoutMs": 15000
+        },
+
+        // API 認証トークン（cursor-agent-a2a が認証を要求する場合）
+        "token": "your-api-key"
+      }
+    }
+  },
+  "models": {
+    // cursorModel オプションを指定して明示的に指定可能
+    "opencode-cursorcli-a2a/claude-4.6-sonnet-medium": {
+      "options": {
+        "cursorModel": "claude-4.6-sonnet-medium"
+      }
+    }
+  }
+}
+```
+
+### 利用可能な Cursor モデル名
+
+| モデル名 | 説明 |
+|---|---|
+| `auto` | 自動選択 (デフォルト) |
+| `claude-4.6-sonnet-medium` | Claude 3.7 Sonnet |
+| `claude-4.6-opus-high-thinking` | Claude 3.7 Opus + Extended Thinking |
+| `gpt-5.4-high` | GPT-4o 高性能版 |
+| `gpt-5.4-xhigh` | GPT-4o 最高性能 |
+| `gpt-5.3-codex-high` | GPT-4o mini 等のコーディング版 |
+| `composer-2` | Composer v2 モデル |
+
+<details>
+<summary>すべての利用可能なモデル一覧（展開して表示）</summary>
+
+auto, composer-2-fast, composer-2, composer-1.5, gpt-5.3-codex-low, gpt-5.3-codex-low-fast, gpt-5.3-codex, gpt-5.3-codex-fast, gpt-5.3-codex-high, gpt-5.3-codex-high-fast, gpt-5.3-codex-xhigh, gpt-5.3-codex-xhigh-fast, gpt-5.2, gpt-5.3-codex-spark-preview-low, gpt-5.3-codex-spark-preview, gpt-5.3-codex-spark-preview-high, gpt-5.3-codex-spark-preview-xhigh, gpt-5.2-codex-low, gpt-5.2-codex-low-fast, gpt-5.2-codex, gpt-5.2-codex-fast, gpt-5.2-codex-high, gpt-5.2-codex-high-fast, gpt-5.2-codex-xhigh, gpt-5.2-codex-xhigh-fast, gpt-5.1-codex-max-low, gpt-5.1-codex-max-low-fast, gpt-5.1-codex-max-medium, gpt-5.1-codex-max-medium-fast, gpt-5.1-codex-max-high, gpt-5.1-codex-max-high-fast, gpt-5.1-codex-max-xhigh, gpt-5.1-codex-max-xhigh-fast, gpt-5.4-high, gpt-5.4-high-fast, gpt-5.4-xhigh-fast, claude-4.6-opus-high-thinking, gpt-5.4-low, gpt-5.4-medium, gpt-5.4-medium-fast, gpt-5.4-xhigh, claude-4.6-sonnet-medium
+
+</details>
+
+> 最新の一覧は `cursor agent --list-models` で確認できます。
+
+---
+
+## 環境変数
+
+| 変数名 | 説明 | デフォルト |
+|---|---|---|
+| `CURSOR_AGENT_API_KEY` | cursor-agent-a2a の認証 Bearer トークン | なし |
+| `CURSOR_DEFAULT_MODEL` | デフォルトモデル名 | `auto` |
+| `CURSOR_A2A_HOST` | サーバーホスト | `127.0.0.1` |
+| `CURSOR_A2A_PORT` | サーバーポート | `4937` |
+| `CURSOR_A2A_WORKSPACE` | デフォルトワークスペースパス | `process.cwd()` |
+| `DEBUG_OPENCODE` | デバッグログを有効化 | なし |
+
+---
+
+## 動作の仕組み
+
+```
+OpenCode
+  └─► Provider (doStream)
+        ├─ [1] autoStart が有効なら cursor-agent-a2a を await 起動
+        ├─ [2] POST /messages?stream=true  →  cursor-agent-a2a サーバー (port 4937)
+        └─ [3] SSE レスポンスを AI SDK ストリームパーツに変換して返却
+```
+
+- **セッション管理**: `sessionId` を自動生成し multi-turn 会話を維持します
+- **自動起動**: `autoStart` 設定時、初回 API 呼び出し前にサーバー起動完了を await します
+- **フォールバック**: レート制限 (429) 時に別のモデルへ自動切り替え可能
+
+---
+
+## 開発
+
+```bash
+npm run build      # ビルド
+npm run test       # テスト（83 件）
+npm run typecheck  # 型チェック
+```
+
+## ライセンス
+
+MIT
