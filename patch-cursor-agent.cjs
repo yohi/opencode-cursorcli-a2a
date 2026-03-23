@@ -64,6 +64,7 @@ function patch() {
         }
     } catch (err) {
         console.error(`[patch-cursor-agent] Critical error during patching: ${err.message}`);
+        process.exit(1);
     }
 }
 
