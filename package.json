@@ -39,7 +39,8 @@
       "import": "./dist/index.js",
       "require": "./dist/index.cjs"
     }
-  },  "scripts": {
+  },
+  "scripts": {
     "build:provider": "esbuild src/index.ts --bundle --platform=node --format=cjs --outfile=dist/index.cjs --footer:js=\"if (typeof module !== 'undefined' && module.exports) { const original = module.exports; const factory = original.default || original.createCursorA2AProvider || original; if (typeof factory === 'function') { var _copy = function(src) { for (var _i = 0, _e = Object.entries(src); _i < _e.length; _i++) { var k = _e[_i][0], v = _e[_i][1]; if (k !== 'default') { try { Object.defineProperty(factory, k, { value: v, writable: true, configurable: true, enumerable: true }); } catch(_){} } } }; _copy(original); if (original.provider) { _copy(original.provider); } module.exports = factory; } }\" && esbuild src/index.ts --bundle --platform=node --format=esm --outfile=dist/index.js",
     "build:server": "esbuild src/server/index.ts --bundle --platform=node --format=esm --outfile=dist/server.js --external:express --external:cors",
     "build": "npm run build:provider && npm run build:server",
@@ -53,15 +54,17 @@
     "@ai-sdk/provider": "^3.0.8",
     "@ai-sdk/provider-utils": "^4.0.19",
     "ai": "^6.0.116",
-    "ofetch": "^1.4.0",
-    "zod": "^3.25.76",
+    "cors": "^2.8.5",
     "express": "^4.18.2",
-    "cors": "^2.8.5"
+    "ofetch": "^1.4.0",
+    "zod": "^3.25.76"
   },
   "optionalDependencies": {
     "cursor-agent-a2a": "^2.0.0"
   },
   "devDependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
     "@types/node": "^22.0.0",
     "esbuild": "^0.24.0",
     "tsup": "^8.0.0",

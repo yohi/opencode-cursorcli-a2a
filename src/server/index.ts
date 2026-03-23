@@ -16,7 +16,7 @@ const ALLOWED_ORIGINS = process.env['ALLOWED_ORIGINS']?.split(',') || ['http://l
 const AUTH_TOKEN = process.env['A2A_AUTH_TOKEN'];
 
 app.use(cors({
-    origin: (origin, callback) => {
+    origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
         if (!origin || ALLOWED_ORIGINS.includes(origin)) {
             callback(null, true);
         } else {
@@ -39,7 +39,7 @@ const authMiddleware = (req: express.Request, res: express.Response, next: expre
 };
 
 // Health check
-app.get('/health', (req, res) => {
+app.get('/health', (_req: express.Request, res: express.Response) => {
     res.json({
         status: 'ok',
         service: 'opencode-cursor-a2a-internal',
@@ -48,7 +48,7 @@ app.get('/health', (req, res) => {
 });
 
 // A2A Messages Endpoint (Streaming)
-app.post('/:projectId/messages', authMiddleware, async (req, res) => {
+app.post('/:projectId/messages', authMiddleware, async (req: express.Request, res: express.Response) => {
     const { message, sessionId, model } = req.body;
     const { projectId } = req.params;
     const stream = req.query.stream === 'true' || req.headers.accept === 'text/event-stream';
@@ -80,11 +80,13 @@ app.post('/:projectId/messages', authMiddleware, async (req, res) => {
             });
             res.write(`data: ${JSON.stringify({ type: 'done', sessionId: capturedSessionId })}\n\n`);
             res.end();
+            return;
         } catch (error) {
             if (controller.signal.aborted) return;
             const errorMessage = error instanceof Error ? error.message : String(error);
             res.write(`data: ${JSON.stringify({ type: 'error', error: errorMessage })}\n\n`);
             res.end();
+            return;
         }
     } else {
         // Synchronous mode (simplified)
@@ -101,8 +103,10 @@ app.post('/:projectId/messages', authMiddleware, async (req, res) => {
                 response: responseText,
                 sessionId: capturedSessionId
             });
+            return;
         } catch (error) {
             res.status(500).json({ error: String(error) });
+            return;
         }
     }
 });
