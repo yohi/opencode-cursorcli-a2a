@@ -1,0 +1,79 @@
+{
+  "name": "@yohi/opencode-cursorcli-a2a-provider",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "OpenCode custom provider plugin that communicates with CursorCLI via A2A protocol",
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  },
+  "opencode": {
+    "id": "opencode-cursorcli-a2a",
+    "type": "provider",
+    "displayName": "CursorCLI (A2A)",
+    "description": "Cursor CLI A2A プロトコル経由のプロバイダー",
+    "models": [
+      {
+        "id": "cursor-agent",
+        "name": "Cursor Agent (A2A)"
+      },
+      {
+        "id": "cursor-agent-fast",
+        "name": "Cursor Agent Fast (A2A)"
+      },
+      {
+        "id": "cursor-agent-claude-4-opus",
+        "name": "Cursor Agent (Claude 4 Opus via A2A)"
+      },
+      {
+        "id": "cursor-agent-gpt-4o",
+        "name": "Cursor Agent (GPT-4o via A2A)"
+      }
+    ]
+  },
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "scripts": {
+    "build:provider": "esbuild src/index.ts --bundle --platform=node --format=cjs --outfile=dist/index.cjs --footer:js=\"if (typeof module !== 'undefined' && module.exports) { const original = module.exports; const factory = original.default || original.createCursorA2AProvider || original; if (typeof factory === 'function') { var _copy = function(src) { for (var _i = 0, _e = Object.entries(src); _i < _e.length; _i++) { var k = _e[_i][0], v = _e[_i][1]; if (k !== 'default') { try { Object.defineProperty(factory, k, { value: v, writable: true, configurable: true, enumerable: true }); } catch(_){} } } }; _copy(original); if (original.provider) { _copy(original.provider); } module.exports = factory; } }\" && esbuild src/index.ts --bundle --platform=node --format=esm --outfile=dist/index.js",
+    "build:server": "esbuild src/server/index.ts --bundle --platform=node --format=esm --outfile=dist/server.js --external:express --external:cors",
+    "build": "npm run build:provider && npm run build:server",
+    "dev": "tsup --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@ai-sdk/provider": "^3.0.8",
+    "@ai-sdk/provider-utils": "^4.0.19",
+    "ai": "^6.0.116",
+    "cors": "^2.8.5",
+    "express": "^4.18.2",
+    "ofetch": "^1.4.0",
+    "zod": "^3.25.76"
+  },
+  "optionalDependencies": {
+    "cursor-agent-a2a": "^2.0.0"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/node": "^22.0.0",
+    "esbuild": "^0.24.0",
+    "tsup": "^8.0.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  },
+  "files": [
+    "dist"
+  ],
+  "license": "MIT"
+}
