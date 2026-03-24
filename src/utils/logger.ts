@@ -18,7 +18,8 @@ function safeStringify(value: any): string {
         return JSON.stringify(value, (_key, val) => {
             if (typeof val === 'bigint') return val.toString();
             if (val instanceof Error) {
-                return { ...val, message: val.message, name: val.name, stack: val.stack };
+                const { message, name, stack, ...rest } = val;
+                return { message, name, stack, ...rest };
             }
             if (typeof val === 'object' && val !== null) {
                 if (seen.has(val)) return '[Circular]';

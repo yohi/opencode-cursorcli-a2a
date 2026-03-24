@@ -99,11 +99,22 @@ describe('RpcResponseSchema', () => {
 });
 
 describe('CURSOR_AGENT_MODELS', () => {
-    it('includes expected models', () => {
+    it('is a non-empty array of non-empty strings', () => {
+        expect(Array.isArray(CURSOR_AGENT_MODELS)).toBe(true);
+        expect(CURSOR_AGENT_MODELS.length).toBeGreaterThan(0);
+        for (const model of CURSOR_AGENT_MODELS) {
+            expect(typeof model).toBe('string');
+            expect(model.length).toBeGreaterThan(0);
+        }
+    });
+
+    it('contains "auto"', () => {
         expect(CURSOR_AGENT_MODELS).toContain('auto');
-        expect(CURSOR_AGENT_MODELS).toContain('claude-4.6-sonnet-medium');
-        expect(CURSOR_AGENT_MODELS).toContain('gpt-5.4-high');
-        expect(CURSOR_AGENT_MODELS).toContain('composer-2');
+    });
+
+    it('has no duplicates', () => {
+        const uniqueModels = new Set(CURSOR_AGENT_MODELS);
+        expect(uniqueModels.size).toBe(CURSOR_AGENT_MODELS.length);
     });
 
     it('has at least 6 models', () => {

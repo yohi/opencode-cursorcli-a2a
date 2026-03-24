@@ -140,22 +140,36 @@ export const A2AResponseResultSchema = z.union([
         status: z.object({
             state: z.union([z.enum(STATUS_STATES), z.string()]),
             message: z.object({
-                parts: z.array(z.object({
-                    kind: z.string(),
-                    text: z.string().optional(),
-                    data: z.unknown().optional(),
-                    image: z.object({
-                        mimeType: z.string().optional(),
-                        bytes: z.string().optional(),
-                        uri: z.string().optional(),
-                    }).optional(),
-                    file: z.object({
-                        name: z.string().optional(),
-                        mimeType: z.string().optional(),
-                        fileWithBytes: z.string().optional(),
-                        uri: z.string().optional(),
-                    }).optional(),
-                })),
+                parts: z.array(z.discriminatedUnion('kind', [
+                    z.object({ kind: z.literal('text'), text: z.string() }),
+                    z.object({
+                        kind: z.literal('file'),
+                        file: z.object({
+                            name: z.string().optional(),
+                            mimeType: z.string().optional(),
+                            fileWithBytes: z.string().optional(),
+                            uri: z.string().optional(),
+                        }).passthrough().refine(
+                            (obj: Record<string, unknown>) => Boolean(obj['fileWithBytes']) || Boolean(obj['uri']),
+                            { message: 'file must contain at least one of fileWithBytes, or uri' }
+                        ),
+                    }),
+                    z.object({
+                        kind: z.literal('image'),
+                        image: z.object({
+                            mimeType: z.string().optional(),
+                            bytes: z.string().optional(),
+                            uri: z.string().optional(),
+                        }).passthrough().refine(
+                            (obj: Record<string, unknown>) => Boolean(obj['bytes']) || Boolean(obj['uri']),
+                            { message: 'image must contain at least one of bytes, or uri' }
+                        ),
+                    }),
+                    z.object({
+                        kind: z.literal('data'),
+                        data: z.unknown(),
+                    }),
+                ])),
             }).optional(),
             timestamp: z.string().optional(),
         }),
@@ -235,13 +249,15 @@ export const CursorAgentMessageRequestSchema = z.object({
 export type CursorAgentMessageRequest = z.infer<typeof CursorAgentMessageRequestSchema>;
 
 /** SSE ストリームイベント (POST /messages?stream=true) */
-export const CursorAgentStreamEventSchema = z.union([
+export const CursorAgentStreamEventSchema = z.discriminatedUnion('type', [
     z.object({ type: z.literal('text'), content: z.string() }),
+    z.object({ type: z.literal('message'), content: z.string() }),
     z.object({ type: z.literal('complete'), sessionId: z.string().optional(), metadata: z.record(z.unknown()).optional() }),
     z.object({ type: z.literal('error'), message: z.string(), code: z.number().optional() }),
     z.object({ type: z.literal('tool_call'), name: z.string(), arguments: z.record(z.unknown()).optional(), callId: z.string().optional() }),
     z.object({ type: z.literal('tool_result'), callId: z.string().optional(), result: z.unknown() }),
-    z.object({ type: z.string() }).passthrough(),
+    z.object({ type: z.literal('thinking'), text: z.string().optional(), subtype: z.string().optional() }),
+    z.object({ type: z.literal('reasoning'), text: z.string().optional(), subtype: z.string().optional() }),
 ]);
 
 export type CursorAgentStreamEvent = z.infer<typeof CursorAgentStreamEventSchema>;
