@@ -171,7 +171,9 @@ export class ServerManager {
     private static instance: ServerManager | undefined;
     private servers = new Map<string, ManagedServer>(); // keyed by "host:port"
     private startingUp = new Map<string, Promise<void>>();
+    private startingProcs = new Set<ChildProcess>(); // Track processes during startup
     private cleanupRegistered = false;
+    private isShuttingDown = false;
     private cleanupHandlers: Array<{ event: string; handler: (...args: unknown[]) => void }> = [];
 
     private constructor() {}
@@ -228,9 +230,20 @@ export class ServerManager {
                 ...config.env,
             };
 
+            const isJs = /\.(js|mjs|cjs|ts)$/.test(serverPath);
             const isTs = serverPath.endsWith('.ts');
-            const args = isTs ? ['tsx', serverPath] : [serverPath];
-            const cmd = isTs ? 'npx' : 'node';
+            
+            let cmd: string;
+            let args: string[];
+            
+            if (isJs) {
+                cmd = isTs ? 'npx' : 'node';
+                args = isTs ? ['tsx', serverPath] : [serverPath];
+            } else {
+                // Execute direct if not JS/TS (e.g. .exe, .cmd, or native binary)
+                cmd = serverPath;
+                args = [];
+            }
 
             logger.info(`Starting CursorAgent server: ${serverPath} (port=${port}, host=${host})`);
 
@@ -238,8 +251,11 @@ export class ServerManager {
                 env,
                 stdio: debug ? (isTs ? 'inherit' : ['ignore', 'pipe', 'pipe']) : 'ignore',
                 detached: false,
-                shell: process.platform === 'win32',
+                shell: process.platform === 'win32' || !isJs,
             });
+
+            this.startingProcs.add(proc);
+            this.registerCleanup();
 
             if (debug && !isTs && proc.stdout) {
                 proc.stdout.on('data', (d: Buffer) => process.stdout.write(`[CursorAgent-${port}] ${d}`));
@@ -251,6 +267,7 @@ export class ServerManager {
             const pollMs = config.pollIntervalMs ?? 200;
             const timeoutMs = config.startupTimeoutMs ?? 15000;
 
+            this.startingProcs.add(proc);
             try {
                 await new Promise<void>((resolve, reject) => {
                     const timeoutId = setTimeout(() => {
@@ -280,10 +297,12 @@ export class ServerManager {
                     }
                 });
             } catch (err) {
+                this.startingProcs.delete(proc);
                 proc.kill();
                 throw err;
             }
 
+            this.startingProcs.delete(proc);
             // 起動成功後に登録
             const entry: ManagedServer = { proc, port, host, refCount: 0 }; 
             this.servers.set(key, entry);
@@ -343,14 +362,12 @@ export class ServerManager {
 
         const exitHandler = () => { try { this.dispose(); } catch { /**/ } };
         const makeSignalHandler = (signal: NodeJS.Signals) => () => {
+            if (this.isShuttingDown) return;
+            this.isShuttingDown = true;
             logger.info(`[ServerManager] Received ${signal}, cleaning up...`);
             try { this.dispose(); } catch { /**/ }
-            const handlersForSignal = this.cleanupHandlers.filter(ch => ch.event === signal);
-            for (const h of handlersForSignal) {
-                process.off(signal, h.handler as NodeJS.SignalsListener);
-            }
-            // Remove them from array to be safe
-            this.cleanupHandlers = this.cleanupHandlers.filter(ch => ch.event !== signal);
+            process.removeAllListeners(signal);
+            this.cleanupHandlers = [];
             process.kill(process.pid, signal);
         };
 
@@ -373,6 +390,12 @@ export class ServerManager {
             try { entry.proc.kill(); } catch { /**/ }
         }
         this.servers.clear();
+
+        for (const proc of this.startingProcs) {
+            try { proc.kill(); } catch { /**/ }
+        }
+        this.startingProcs.clear();
+
         this.cleanupRegistered = false;
         for (const { event, handler } of this.cleanupHandlers) {
             process.removeListener(event, handler as (...args: unknown[]) => void);

@@ -263,9 +263,9 @@ export class ConfigManager {
     }
 
     public onChange(cb: () => void): () => void {
-    this.watchers.add(cb);
-    return () => this.watchers.delete(cb);
-}
+        this.watchers.add(cb);
+        return () => this.watchers.delete(cb);
+    }
 }
 
 // ---------------------------------------------------------------------------
