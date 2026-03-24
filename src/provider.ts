@@ -107,8 +107,9 @@ export class OpenCodeCursorA2AProvider {
                 internalTools: config.internalTools,
                 triggerConfig: config.triggerConfig,
                 contextConfig: config.contextConfig,
-                cursorModel: config.cursorModel,
-                workspace: config.workspace,
+                // 修正: モデル個別の options.cursorModel または root の cursorModel を優先
+                cursorModel: resolved?.config?.options?.cursorModel ?? resolved?.config?.cursorModel ?? config.cursorModel,
+                workspace: resolved?.config?.options?.workspace ?? resolved?.config?.workspace ?? config.workspace,
             };
         } catch (err) {
             Logger.error(`ERROR IN MODEL INIT (${this.modelId}):`, err);
@@ -282,6 +283,7 @@ export class OpenCodeCursorA2AProvider {
         let textPartCounter = 0;
         let reasoningPartCounter = 0;
         const self = this;
+        const abortController = new AbortController();
 
         const stream = new ReadableStream<LanguageModelV1StreamPart>({
             start: async (controller) => {
@@ -291,7 +293,9 @@ export class OpenCodeCursorA2AProvider {
 
                     let finishedNormally = false;
 
-                    for await (const event of parseCursorA2AStream(responseStream)) {
+                    Logger.info('[Provider] Starting to consume response stream');
+                    for await (const event of parseCursorA2AStream(responseStream, abortController.signal)) {
+                        Logger.debug('[Provider] Received event', event.type);
                         const parts = mapper.mapEvent(event);
 
                         for (const part of parts) {
@@ -352,6 +356,7 @@ export class OpenCodeCursorA2AProvider {
                             }
                         }
                     }
+                    Logger.info('[Provider] Response stream consumed completely', { finishedNormally });
 
                     if (!finishedNormally) {
                         // ストリーム終了でも complete イベントが来なかった場合
@@ -379,6 +384,11 @@ export class OpenCodeCursorA2AProvider {
                     controller.error(error);
                 }
             },
+            cancel(reason) {
+                Logger.warn(`[Provider] AI SDK cancelled the generation stream! Reason:`, reason);
+                abortController.abort(reason);
+                try { responseStream.cancel(reason).catch(() => {}); } catch {}
+            }
         });
 
         return {

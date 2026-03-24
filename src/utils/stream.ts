@@ -3,7 +3,7 @@
 // フォーマット: `data: <JSON>\n\n` または `data: [DONE]`
 import { CursorAgentStreamEventSchema, RpcResponseSchema } from '../schemas.js';
 import type { CursorAgentStreamEvent, A2AJsonRpcResponse } from '../schemas.js';
-import { logger } from './logger.js';
+import { Logger } from './logger.js';
 
 /**
  * Common SSE parsing logic.
@@ -11,15 +11,39 @@ import { logger } from './logger.js';
 async function* parseSSEStream<T>(
     stream: ReadableStream<Uint8Array>,
     mapper: (dataStr: string) => T | undefined,
+    abortSignal?: AbortSignal,
 ): AsyncGenerator<T> {
     const decoder = new TextDecoder();
     const reader = stream.getReader();
     let buffer = '';
 
+    const onAbort = () => {
+        reader.cancel().catch(() => {});
+    };
+
+    if (abortSignal) {
+        if (abortSignal.aborted) {
+            reader.cancel(abortSignal.reason).catch(() => {});
+            reader.releaseLock();
+            throw abortSignal.reason || new Error('AbortError');
+        }
+        abortSignal.addEventListener('abort', onAbort, { once: true });
+    }
+
     try {
+        Logger.info('[Stream] Starting to read from reader');
         while (true) {
+            if (abortSignal?.aborted) {
+                break;
+            }
+
             const { done, value } = await reader.read();
-            if (done) break;
+            if (done) {
+                Logger.info('[Stream] Reader done');
+                buffer += decoder.decode(); // Flush any remaining bytes
+                break;
+            }
+            Logger.debug(`[Stream] Read ${value.length} bytes`);
             buffer += decoder.decode(value, { stream: true });
 
             const lines = buffer.split('\n');
@@ -33,14 +57,17 @@ async function* parseSSEStream<T>(
                     ? trimmed.slice(5).trim()
                     : trimmed;
 
-                if (dataStr === '[DONE]') return;
+                if (dataStr === '[DONE]') {
+                    Logger.info('[Stream] Received [DONE] marker');
+                    return;
+                }
 
                 const result = mapper(dataStr);
                 if (result !== undefined) yield result;
             }
         }
 
-        if (buffer.trim()) {
+        if (!abortSignal?.aborted && buffer.trim()) {
             const dataStr = buffer.trim().startsWith('data:')
                 ? buffer.trim().slice(5).trim()
                 : buffer.trim();
@@ -49,7 +76,14 @@ async function* parseSSEStream<T>(
                 if (result !== undefined) yield result;
             }
         }
+    } catch (e) {
+        Logger.error('[Stream] Error during reading/parsing stream', e);
+        throw e;
     } finally {
+        Logger.info('[Stream] Releasing reader lock');
+        if (abortSignal) {
+            abortSignal.removeEventListener('abort', onAbort);
+        }
         reader.releaseLock();
     }
 }
@@ -64,40 +98,41 @@ async function* parseSSEStream<T>(
  */
 export function parseCursorA2AStream(
     stream: ReadableStream<Uint8Array>,
+    abortSignal?: AbortSignal,
 ): AsyncGenerator<CursorAgentStreamEvent> {
     return parseSSEStream(stream, (dataStr) => {
         try {
             const parsed = JSON.parse(dataStr);
             return CursorAgentStreamEventSchema.parse(parsed);
         } catch (e) {
-            logger.error(`Failed to parse cursor-agent-a2a SSE event`, { error: e, data: dataStr });
+            const dataLength = dataStr.length;
+            const dataPreview = dataStr.length > 100 ? dataStr.substring(0, 100) + '...' : dataStr;
+            Logger.error(`Failed to parse cursor-agent-a2a SSE event`, { error: e, dataLength, dataPreview });
             throw new Error(
-                `Failed to parse cursor-agent-a2a SSE event: ${e instanceof Error ? e.message : String(e)} -- data: ${dataStr}`,
+                `Failed to parse cursor-agent-a2a SSE event: ${e instanceof Error ? e.message : String(e)} -- data length: ${dataLength}, preview: ${dataPreview}`,
             );
         }
-    });
+    }, abortSignal);
 }
 
-// ---------------------------------------------------------------------------
-// Legacy: 旧 A2A JSON-RPC SSE パーサー (後方互換性のため保持)
-// ---------------------------------------------------------------------------
-
-/**
- * @deprecated cursor-agent-a2a REST API では `parseCursorA2AStream` を使用すること。
- * 旧 A2A JSON-RPC ストリームパーサー。
- */
-export function parseA2AStream(
-    stream: ReadableStream<Uint8Array>,
-): AsyncGenerator<A2AJsonRpcResponse> {
-    return parseSSEStream(stream, (dataStr) => {
-        try {
-            const parsed = JSON.parse(dataStr);
-            return RpcResponseSchema.parse(parsed);
-        } catch (e) {
-            logger.error(`Failed to parse A2A JSON-RPC SSE event`, { error: e, data: dataStr });
-            throw new Error(
-                `Failed to parse A2A JSON-RPC SSE event: ${e instanceof Error ? e.message : String(e)} -- data: ${dataStr}`,
-            );
+        /**
+         * 旧 A2A JSON-RPC ストリームパーサー。
+         */
+        export function parseA2AStream(
+            stream: ReadableStream<Uint8Array>,
+            abortSignal?: AbortSignal,
+        ): AsyncIterable<A2AJsonRpcResponse> {
+            return parseSSEStream(stream, (dataStr) => {
+                try {
+                    const parsed = JSON.parse(dataStr);
+                    return RpcResponseSchema.parse(parsed);
+                } catch (e) {
+                    const dataLength = dataStr.length;
+                    const dataPreview = dataStr.length > 100 ? dataStr.substring(0, 100) + '...' : dataStr;
+                    Logger.error(`Failed to parse A2A JSON-RPC SSE event`, { error: e, dataLength, dataPreview });
+                    throw new Error(
+                        `Failed to parse A2A JSON-RPC SSE event: ${e instanceof Error ? e.message : String(e)} -- data length: ${dataLength}, preview: ${dataPreview}`,
+                    );
+                }
+            }, abortSignal);
         }
-    });
-}

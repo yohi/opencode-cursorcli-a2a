@@ -30,10 +30,13 @@ app.use(express.json());
 
 // Simple Auth Middleware
 const authMiddleware = (req: express.Request, res: express.Response, next: express.NextFunction) => {
-    if (!AUTH_TOKEN) return next();
+    if (!AUTH_TOKEN) {
+        return next();
+    }
     
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
+        logger.warn('Auth failed: Missing or invalid authorization header');
         return res.status(401).json({ error: 'Unauthorized' });
     }
 
@@ -48,10 +51,11 @@ const authMiddleware = (req: express.Request, res: express.Response, next: expre
             crypto.timingSafeEqual(expectedBuffer, providedBuffer)) {
             return next();
         }
-    } catch {
-        // Fallback or error in buffer conversion
+    } catch (e) {
+        logger.error('Error during token comparison', e);
     }
 
+    logger.warn('Auth failed: Invalid token provided');
     res.status(401).json({ error: 'Unauthorized' });
 };
 
@@ -64,6 +68,32 @@ app.get('/health', (_req: express.Request, res: express.Response) => {
     });
 });
 
+/**
+ * Projects API (Mock for A2A compatibility)
+ */
+const projects: Array<{ id: string; workspace: string; name: string }> = [
+    { id: 'default', workspace: process.cwd(), name: 'default' }
+];
+
+app.get('/projects', authMiddleware, (_req: express.Request, res: express.Response) => {
+    res.json({ projects });
+});
+
+app.post('/projects', authMiddleware, (req: express.Request, res: express.Response) => {
+    if (!req.body || typeof req.body !== 'object') {
+        return res.status(400).json({ error: 'Invalid request body' });
+    }
+    const { name, workspace } = req.body;
+    if (typeof workspace !== 'string' || workspace.trim().length === 0) {
+        return res.status(400).json({ error: 'Missing or invalid workspace' });
+    }
+    const trimmedWorkspace = workspace.trim();
+    const id = `p-${crypto.randomBytes(4).toString('hex')}`;
+    const newProject = { id, workspace: trimmedWorkspace, name: name || id };
+    projects.push(newProject);
+    res.json(newProject);
+});
+
 // A2A Messages Endpoint (Streaming)
 app.post('/:projectId/messages', authMiddleware, async (req: express.Request, res: express.Response) => {
     const { message, sessionId, model } = req.body;
@@ -72,39 +102,106 @@ app.post('/:projectId/messages', authMiddleware, async (req: express.Request, re
 
     logger.info('Processing request', { projectId, sessionId: sessionId || 'new', stream });
 
-    if (!message) {
-        return res.status(400).json({ error: 'Missing message' });
+    if (typeof message !== 'string' || message.trim().length === 0) {
+        return res.status(400).json({ error: 'Missing or invalid message' });
     }
 
-    const workspace = process.env['CURSOR_WORKSPACE'] || process.cwd();
+    const project = projects.find(p => p.id === projectId);
+    if (!project) {
+        return res.status(404).json({ error: `Project not found: ${projectId}` });
+    }
+    const workspace = project.workspace;
     let capturedSessionId = sessionId;
 
     if (stream) {
         res.setHeader('Content-Type', 'text/event-stream');
         res.setHeader('Cache-Control', 'no-cache');
         res.setHeader('Connection', 'keep-alive');
+        res.setHeader('Transfer-Encoding', 'chunked');
         res.flushHeaders();
+        
+        // SSE Preamble/Ping to stabilize the stream for some clients (like undici/fetch)
+        res.write(': connected\n\n');
 
         const controller = new AbortController();
-        req.on('close', () => {
-            controller.abort();
+        res.on('close', () => {
+            if (!res.writableEnded) {
+                logger.warn('Response connection closed prematurely by client, aborting agent', { projectId, sessionId });
+                controller.abort();
+            }
         });
 
         try {
-            await executeCursorAgentStream(message, { workspace, sessionId, model, signal: controller.signal }, (event) => {
+            await executeCursorAgentStream(message, { workspace, sessionId, model, signal: controller.signal }, (event: any) => {
                 if (event.sessionId) capturedSessionId = event.sessionId;
-                res.write(`data: ${JSON.stringify(event)}\n\n`);
+
+                // 書き込み可能かチェック
+                if (res.destroyed || !res.writable || controller.signal.aborted) {
+                    return;
+                }
+
+                // イベントの正規化 (CursorAgentStreamEventSchema に適合させる)
+                let normalizedEvent: any = null;
+
+                const eventType = event.type;
+                if (eventType === 'text' || eventType === 'message' || eventType === 'thinking' || eventType === 'reasoning' || eventType === 'result' || eventType === 'done' || eventType === 'complete') {
+                    normalizedEvent = event;
+                } else if (eventType === 'tool_call') {
+                    normalizedEvent = {
+                        type: 'tool_call',
+                        name: event.name || event.toolName || 'unknown',
+                        arguments: event.arguments || event.parameters || {},
+                        callId: event.callId || event.toolCallId
+                    };
+                } else if (eventType === 'tool_result') {
+                    normalizedEvent = {
+                        type: 'tool_result',
+                        callId: event.callId || event.toolCallId,
+                        result: event.result
+                    };
+                } else if (eventType === 'error') {
+                    normalizedEvent = {
+                        type: 'error',
+                        message: event.message || event.content || String(event.error || 'Unknown error'),
+                        code: event.code
+                    };
+                } else if (eventType === 'tool_use' || eventType === 'info' || eventType === 'warning') {
+                    // 非標準イベントを message にマップ
+                    normalizedEvent = {
+                        type: 'message',
+                        content: `[${eventType}] ${event.content || event.message || JSON.stringify(event)}`
+                    };
+                } else if (event instanceof Error) {
+                    normalizedEvent = {
+                        type: 'error',
+                        message: event.message
+                    };
+                } else {
+                    // その他は message として扱う
+                    normalizedEvent = {
+                        type: 'message',
+                        content: typeof event === 'string' ? event : JSON.stringify(event)
+                    };
+                }
+
+                if (normalizedEvent) {
+                    const chunk = `data: ${JSON.stringify(normalizedEvent)}\n\n`;
+                    res.write(chunk);
+                }
             });
-            res.write(`data: ${JSON.stringify({ type: 'done', sessionId: capturedSessionId })}\n\n`);
-            res.end();
+
+            if (!res.destroyed && res.writable && !controller.signal.aborted) {
+                res.write(`data: ${JSON.stringify({ type: 'done', sessionId: capturedSessionId })}\n\n`);
+                res.end();
+            }
             return;
         } catch (error) {
-            if (controller.signal.aborted) {
-                res.end();
+            if (controller.signal.aborted || res.destroyed || !res.writable) {
+                if (!res.writableEnded) res.end();
                 return;
             }
             const errorMessage = error instanceof Error ? error.message : String(error);
-            res.write(`data: ${JSON.stringify({ type: 'error', error: errorMessage })}\n\n`);
+            res.write(`data: ${JSON.stringify({ type: 'error', message: errorMessage })}\n\n`);
             res.end();
             return;
         }
@@ -142,6 +239,31 @@ app.post('/:projectId/messages', authMiddleware, async (req: express.Request, re
 });
 
 // Start server
-app.listen(PORT, HOST, () => {
+const server = app.listen(PORT, HOST, () => {
     logger.child({ host: HOST, port: PORT }).info('Internal Cursor A2A Server started');
+});
+
+const gracefulShutdown = (msg: string, err?: any) => {
+    logger.error(msg, err);
+    server.close(() => {
+        logger.info('Server closed');
+        process.exit(1);
+    });
+    // Force exit after 5s
+    setTimeout(() => {
+        logger.warn('Forced exit after timeout');
+        process.exit(1);
+    }, 5000);
+};
+
+server.on('error', (err) => {
+    gracefulShutdown('SERVER ERROR:', err);
+});
+
+process.on('uncaughtException', (err) => {
+    gracefulShutdown('UNCAUGHT EXCEPTION:', err);
+});
+
+process.on('unhandledRejection', (reason) => {
+    gracefulShutdown('UNHANDLED REJECTION:', reason);
 });

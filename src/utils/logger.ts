@@ -82,5 +82,4 @@ export const logger = {
     })
 };
 
-// a2a-client.ts などのために Logger (大文字) もエクスポート
 export const Logger = logger;

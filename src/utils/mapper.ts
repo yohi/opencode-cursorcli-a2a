@@ -238,6 +238,7 @@ export class CursorA2AStreamMapper {
         this._promptTokens = 0;
         this._completionTokens = 0;
         this._textId = `text-${crypto.randomUUID().slice(0, 8)}`;
+        this._lastFinishReason = 'unknown';
     }
 
     /**
@@ -287,21 +288,57 @@ export class CursorA2AStreamMapper {
                 break;
             }
 
-            case 'complete': {
+            case 'complete':
+            case 'done':
+            case 'result': {
                 if (event.sessionId) this._sessionId = event.sessionId;
-                const metadata = (event.metadata ?? {}) as Record<string, unknown>;
+                
+                let metadata: Record<string, unknown> = {};
+                
+                // 1. メタデータ (usage) の抽出
+                if (event.type === 'complete') {
+                    metadata = (event.metadata ?? {}) as Record<string, unknown>;
+                } else if (event.type === 'result' && event.data && typeof event.data === 'object') {
+                    const data = event.data as any;
+                    if (data.usage) {
+                        metadata = {
+                            promptTokens: data.usage.inputTokens,
+                            completionTokens: data.usage.outputTokens,
+                            cacheReadTokens: data.usage.cacheReadTokens,
+                            cacheWriteTokens: data.usage.cacheWriteTokens
+                        };
+                    }
+                    
+                    if (this._textAccum.length === 0 && typeof data.result === 'string') {
+                        const newText = data.result;
+                        this._textAccum = newText;
+                        parts.push({
+                            type: 'text-delta',
+                            id: this._textId,
+                            delta: newText,
+                        } as LanguageModelV1StreamPart);
+                    }
+                } else if (event.type === 'done') {
+                    // 'done' に metadata が含まれる可能性を考慮
+                    metadata = (event as any).metadata ?? {};
+                }
+
                 this._promptTokens = (metadata['promptTokens'] as number | undefined) ?? this._promptTokens;
                 this._completionTokens = (metadata['completionTokens'] as number | undefined) ?? this._completionTokens;
-                this._lastFinishReason = 'stop';
-                parts.push({
-                    type: 'finish',
-                    finishReason: 'stop',
-                    usage: {
-                        inputTokens: { total: this._promptTokens },
-                        outputTokens: { total: this._completionTokens },
-                    },
-                    providerMetadata: Object.keys(metadata).length > 0 ? { 'cursor-agent': metadata } : undefined,
-                } as ExtendedFinishPart);
+                
+                // 2. 終了パーツの追加 (二重発行を防止)
+                if (this._lastFinishReason !== 'stop') {
+                    this._lastFinishReason = 'stop';
+                    parts.push({
+                        type: 'finish',
+                        finishReason: 'stop',
+                        usage: {
+                            inputTokens: { total: this._promptTokens },
+                            outputTokens: { total: this._completionTokens },
+                        },
+                        providerMetadata: Object.keys(metadata).length > 0 ? { 'cursor-agent': metadata } : undefined,
+                    } as ExtendedFinishPart);
+                }
                 break;
             }
 
