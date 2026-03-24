@@ -287,21 +287,56 @@ export class CursorA2AStreamMapper {
                 break;
             }
 
-            case 'complete': {
+            case 'complete':
+            case 'done':
+            case 'result': {
                 if (event.sessionId) this._sessionId = event.sessionId;
-                const metadata = (event.metadata ?? {}) as Record<string, unknown>;
+                
+                let metadata: Record<string, unknown> = {};
+                if (event.type === 'complete') {
+                    metadata = (event.metadata ?? {}) as Record<string, unknown>;
+                } else if (event.type === 'result' && event.data && typeof event.data === 'object') {
+                    const data = event.data as any;
+                    if (data.usage) {
+                        metadata = {
+                            promptTokens: data.usage.inputTokens,
+                            completionTokens: data.usage.outputTokens,
+                            cacheReadTokens: data.usage.cacheReadTokens,
+                            cacheWriteTokens: data.usage.cacheWriteTokens
+                        };
+                    }
+                    
+                    // If we haven't accumulated any text, and result contains the final text, yield it.
+                    if (this._textAccum.length === 0 && typeof data.result === 'string') {
+                        const newText = data.result;
+                        this._textAccum = newText;
+                        parts.push({
+                            type: 'text-delta',
+                            id: this._textId,
+                            delta: newText,
+                        } as LanguageModelV1StreamPart);
+                    }
+                }
+
                 this._promptTokens = (metadata['promptTokens'] as number | undefined) ?? this._promptTokens;
                 this._completionTokens = (metadata['completionTokens'] as number | undefined) ?? this._completionTokens;
-                this._lastFinishReason = 'stop';
-                parts.push({
-                    type: 'finish',
-                    finishReason: 'stop',
-                    usage: {
-                        inputTokens: { total: this._promptTokens },
-                        outputTokens: { total: this._completionTokens },
-                    },
-                    providerMetadata: Object.keys(metadata).length > 0 ? { 'cursor-agent': metadata } : undefined,
-                } as ExtendedFinishPart);
+                
+                // If this is a final marker, emit finish
+                if (event.type === 'complete' || event.type === 'done' || event.type === 'result') {
+                    // Prevent duplicate finish events if result and done come in sequence
+                    if (this._lastFinishReason !== 'stop') {
+                        this._lastFinishReason = 'stop';
+                        parts.push({
+                            type: 'finish',
+                            finishReason: 'stop',
+                            usage: {
+                                inputTokens: { total: this._promptTokens },
+                                outputTokens: { total: this._completionTokens },
+                            },
+                            providerMetadata: Object.keys(metadata).length > 0 ? { 'cursor-agent': metadata } : undefined,
+                        } as ExtendedFinishPart);
+                    }
+                }
                 break;
             }
 

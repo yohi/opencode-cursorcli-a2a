@@ -3,7 +3,7 @@
 // フォーマット: `data: <JSON>\n\n` または `data: [DONE]`
 import { CursorAgentStreamEventSchema, RpcResponseSchema } from '../schemas.js';
 import type { CursorAgentStreamEvent, A2AJsonRpcResponse } from '../schemas.js';
-import { logger } from './logger.js';
+import { Logger } from './logger.js';
 
 /**
  * Common SSE parsing logic.
@@ -17,9 +17,14 @@ async function* parseSSEStream<T>(
     let buffer = '';
 
     try {
+        Logger.info('[Stream] Starting to read from reader');
         while (true) {
             const { done, value } = await reader.read();
-            if (done) break;
+            if (done) {
+                Logger.info('[Stream] Reader done');
+                break;
+            }
+            Logger.debug(`[Stream] Read ${value.length} bytes`);
             buffer += decoder.decode(value, { stream: true });
 
             const lines = buffer.split('\n');
@@ -33,7 +38,10 @@ async function* parseSSEStream<T>(
                     ? trimmed.slice(5).trim()
                     : trimmed;
 
-                if (dataStr === '[DONE]') return;
+                if (dataStr === '[DONE]') {
+                    Logger.info('[Stream] Received [DONE] marker');
+                    return;
+                }
 
                 const result = mapper(dataStr);
                 if (result !== undefined) yield result;
@@ -49,7 +57,11 @@ async function* parseSSEStream<T>(
                 if (result !== undefined) yield result;
             }
         }
+    } catch (e) {
+        Logger.error('[Stream] Error during reading/parsing stream', e);
+        throw e;
     } finally {
+        Logger.info('[Stream] Releasing reader lock');
         reader.releaseLock();
     }
 }
@@ -70,7 +82,7 @@ export function parseCursorA2AStream(
             const parsed = JSON.parse(dataStr);
             return CursorAgentStreamEventSchema.parse(parsed);
         } catch (e) {
-            logger.error(`Failed to parse cursor-agent-a2a SSE event`, { error: e, data: dataStr });
+            Logger.error(`Failed to parse cursor-agent-a2a SSE event`, { error: e, data: dataStr });
             throw new Error(
                 `Failed to parse cursor-agent-a2a SSE event: ${e instanceof Error ? e.message : String(e)} -- data: ${dataStr}`,
             );
@@ -78,12 +90,7 @@ export function parseCursorA2AStream(
     });
 }
 
-// ---------------------------------------------------------------------------
-// Legacy: 旧 A2A JSON-RPC SSE パーサー (後方互換性のため保持)
-// ---------------------------------------------------------------------------
-
 /**
- * @deprecated cursor-agent-a2a REST API では `parseCursorA2AStream` を使用すること。
  * 旧 A2A JSON-RPC ストリームパーサー。
  */
 export function parseA2AStream(
@@ -94,7 +101,7 @@ export function parseA2AStream(
             const parsed = JSON.parse(dataStr);
             return RpcResponseSchema.parse(parsed);
         } catch (e) {
-            logger.error(`Failed to parse A2A JSON-RPC SSE event`, { error: e, data: dataStr });
+            Logger.error(`Failed to parse A2A JSON-RPC SSE event`, { error: e, data: dataStr });
             throw new Error(
                 `Failed to parse A2A JSON-RPC SSE event: ${e instanceof Error ? e.message : String(e)} -- data: ${dataStr}`,
             );

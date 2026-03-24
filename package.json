@@ -13,20 +13,32 @@
     "description": "Cursor CLI A2A プロトコル経由のプロバイダー",
     "models": [
       {
-        "id": "cursor-agent",
-        "name": "Cursor Agent (A2A)"
+        "id": "auto",
+        "name": "Cursor Agent (Auto)"
       },
       {
-        "id": "cursor-agent-fast",
-        "name": "Cursor Agent Fast (A2A)"
+        "id": "claude-4.6-sonnet-medium",
+        "name": "Cursor Agent (Claude 4.6 Sonnet)"
       },
       {
-        "id": "cursor-agent-claude-4-opus",
-        "name": "Cursor Agent (Claude 4 Opus via A2A)"
+        "id": "claude-4.6-opus-high-thinking",
+        "name": "Cursor Agent (Claude 4.6 Opus Thinking)"
       },
       {
-        "id": "cursor-agent-gpt-4o",
-        "name": "Cursor Agent (GPT-4o via A2A)"
+        "id": "gpt-5.4-high",
+        "name": "Cursor Agent (GPT-5.4 High)"
+      },
+      {
+        "id": "gpt-5.4-medium",
+        "name": "Cursor Agent (GPT-5.4 Medium)"
+      },
+      {
+        "id": "composer-2",
+        "name": "Cursor Agent (Composer 2)"
+      },
+      {
+        "id": "gemini-3.1-pro",
+        "name": "Cursor Agent (Gemini 3.1 Pro)"
       }
     ]
   },

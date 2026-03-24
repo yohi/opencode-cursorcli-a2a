@@ -30,10 +30,13 @@ app.use(express.json());
 
 // Simple Auth Middleware
 const authMiddleware = (req: express.Request, res: express.Response, next: express.NextFunction) => {
-    if (!AUTH_TOKEN) return next();
+    if (!AUTH_TOKEN) {
+        return next();
+    }
     
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
+        logger.warn('Auth failed: Missing or invalid authorization header');
         return res.status(401).json({ error: 'Unauthorized' });
     }
 
@@ -48,10 +51,11 @@ const authMiddleware = (req: express.Request, res: express.Response, next: expre
             crypto.timingSafeEqual(expectedBuffer, providedBuffer)) {
             return next();
         }
-    } catch {
-        // Fallback or error in buffer conversion
+    } catch (e) {
+        logger.error('Error during token comparison', e);
     }
 
+    logger.warn('Auth failed: Invalid token provided');
     res.status(401).json({ error: 'Unauthorized' });
 };
 
@@ -62,6 +66,28 @@ app.get('/health', (_req: express.Request, res: express.Response) => {
         service: 'opencode-cursor-a2a-internal',
         timestamp: new Date().toISOString()
     });
+});
+
+/**
+ * Projects API (Mock for A2A compatibility)
+ */
+const projects: Array<{ id: string; workspace: string; name: string }> = [
+    { id: 'default', workspace: process.cwd(), name: 'default' }
+];
+
+app.get('/projects', authMiddleware, (_req: express.Request, res: express.Response) => {
+    res.json({ projects });
+});
+
+app.post('/projects', authMiddleware, (req: express.Request, res: express.Response) => {
+    const { name, workspace } = req.body;
+    if (!workspace) {
+        return res.status(400).json({ error: 'Missing workspace' });
+    }
+    const id = `p-${crypto.randomBytes(4).toString('hex')}`;
+    const newProject = { id, workspace, name: name || id };
+    projects.push(newProject);
+    res.json(newProject);
 });
 
 // A2A Messages Endpoint (Streaming)
@@ -76,24 +102,34 @@ app.post('/:projectId/messages', authMiddleware, async (req: express.Request, re
         return res.status(400).json({ error: 'Missing message' });
     }
 
-    const workspace = process.env['CURSOR_WORKSPACE'] || process.cwd();
+    const project = projects.find(p => p.id === projectId);
+    const workspace = project?.workspace || process.env['CURSOR_WORKSPACE'] || process.cwd();
     let capturedSessionId = sessionId;
 
     if (stream) {
         res.setHeader('Content-Type', 'text/event-stream');
         res.setHeader('Cache-Control', 'no-cache');
         res.setHeader('Connection', 'keep-alive');
+        res.setHeader('Transfer-Encoding', 'chunked');
         res.flushHeaders();
+        
+        // SSE Preamble/Ping to stabilize the stream for some clients (like undici/fetch)
+        res.write(': connected\n\n');
 
         const controller = new AbortController();
         req.on('close', () => {
-            controller.abort();
+            if (!res.writableEnded) {
+                logger.warn('Request connection closed prematurely by client', { projectId, sessionId });
+                // TEST: Do not abort the controller. Let's see if we can still write to the stream!
+                // controller.abort();
+            }
         });
 
         try {
             await executeCursorAgentStream(message, { workspace, sessionId, model, signal: controller.signal }, (event) => {
                 if (event.sessionId) capturedSessionId = event.sessionId;
-                res.write(`data: ${JSON.stringify(event)}\n\n`);
+                const chunk = `data: ${JSON.stringify(event)}\n\n`;
+                res.write(chunk);
             });
             res.write(`data: ${JSON.stringify({ type: 'done', sessionId: capturedSessionId })}\n\n`);
             res.end();
@@ -142,6 +178,18 @@ app.post('/:projectId/messages', authMiddleware, async (req: express.Request, re
 });
 
 // Start server
-app.listen(PORT, HOST, () => {
+const server = app.listen(PORT, HOST, () => {
     logger.child({ host: HOST, port: PORT }).info('Internal Cursor A2A Server started');
+});
+
+server.on('error', (err) => {
+    logger.error('SERVER FAILED TO START:', err);
+});
+
+process.on('uncaughtException', (err) => {
+    logger.error('UNCAUGHT EXCEPTION:', err);
+});
+
+process.on('unhandledRejection', (reason) => {
+    logger.error('UNHANDLED REJECTION:', reason);
 });

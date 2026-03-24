@@ -258,6 +258,8 @@ export const CursorAgentStreamEventSchema = z.discriminatedUnion('type', [
     z.object({ type: z.literal('tool_result'), callId: z.string().optional(), result: z.unknown() }),
     z.object({ type: z.literal('thinking'), text: z.string().optional(), subtype: z.string().optional() }),
     z.object({ type: z.literal('reasoning'), text: z.string().optional(), subtype: z.string().optional() }),
+    z.object({ type: z.literal('result'), sessionId: z.string().optional(), timestamp: z.number().optional(), data: z.unknown().optional() }),
+    z.object({ type: z.literal('done'), sessionId: z.string().optional() }),
 ]);
 
 export type CursorAgentStreamEvent = z.infer<typeof CursorAgentStreamEventSchema>;
@@ -268,12 +270,12 @@ export type CursorAgentStreamEvent = z.infer<typeof CursorAgentStreamEventSchema
  */
 export const CURSOR_AGENT_MODELS = [
     'auto',                           // 自動選択 (デフォルト)
-    'claude-4.6-sonnet-medium',       // Claude 3.7 Sonnet (Cursor名)
-    'claude-4.6-opus-high-thinking',  // Claude 3.7 Opus + thinking
-    'gpt-5.4-high',                   // GPT-4o 高性能版
-    'gpt-5.4-xhigh',                  // GPT-4o 最高性能
-    'gpt-5.3-codex-high',             // GPT-4o mini 等のコーディング版
-    'composer-2',                     // Composer v2 モデル
+    'claude-4.6-sonnet-medium',       // Sonnet 4.6 1M
+    'claude-4.6-opus-high-thinking',  // Opus 4.6 1M Thinking
+    'gpt-5.4-high',                   // GPT-5.4 1M High
+    'gpt-5.4-medium',                 // GPT-5.4 1M
+    'composer-2',                     // Composer 2
+    'gemini-3.1-pro',                 // Gemini 3.1 Pro
 ] as const;
 
 export type CursorAgentModelName = typeof CURSOR_AGENT_MODELS[number];

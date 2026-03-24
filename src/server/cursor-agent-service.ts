@@ -12,6 +12,7 @@ import { spawn, exec } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import process from 'node:process';
 import { promisify } from 'node:util';
+import { logger } from '../utils/logger.js';
 
 const execAsync = promisify(exec);
 let _cachedCursorCmd: string | null = null;
@@ -106,6 +107,7 @@ export async function executeCursorAgentStream(
             '--workspace',
             workspace,
             '--force',
+            '--trust',
         ];
 
         // Add model if specified
@@ -123,6 +125,8 @@ export async function executeCursorAgentStream(
             ...(config.apiKey && { CURSOR_API_KEY: config.apiKey }),
         };
 
+        logger.info(`Spawning cursor agent: ${cursorCmd} ${args.join(' ')}`, { workspace });
+
         // Spawn cursor process
         const child = spawn(cursorCmd, args, {
             cwd: workspace,
@@ -135,6 +139,7 @@ export async function executeCursorAgentStream(
 
         const processLine = (line: string) => {
             if (!line.trim()) return;
+            logger.debug(`[Cursor Output] ${line}`);
             try {
                 const json = JSON.parse(line);
                 const timestamp = Date.now();
@@ -142,11 +147,11 @@ export async function executeCursorAgentStream(
                 // Extract session ID
                 if (json.session_id && !sessionId) {
                     sessionId = json.session_id;
+                    logger.debug(`Detected Session ID: ${sessionId}`);
                 }
 
                 // Map Cursor output to stream events
                 if (json.type === 'result') {
-                    // Fix: Stop emitting type: 'message' here to avoid duplicates
                     onEvent({
                         type: 'result',
                         sessionId,
@@ -185,6 +190,7 @@ export async function executeCursorAgentStream(
                 }
             } catch (parseError) {
                 // If JSON parsing fails, send as raw message
+                logger.debug(`[Raw Output] ${line}`);
                 onEvent({
                     type: 'message',
                     content: line,
@@ -196,6 +202,7 @@ export async function executeCursorAgentStream(
 
         // Handle abort signal
         const onAbort = () => {
+            logger.warn('Aborting cursor agent process...');
             child.kill('SIGTERM');
             reject(new Error('Cursor agent aborted'));
         };
@@ -210,6 +217,7 @@ export async function executeCursorAgentStream(
 
         // Set up timeout
         const timeoutId = setTimeout(() => {
+            logger.error(`Cursor agent command timed out after ${timeout}ms`);
             if (config.signal) {
                 config.signal.removeEventListener('abort', onAbort);
             }
@@ -219,7 +227,8 @@ export async function executeCursorAgentStream(
 
         // Write message to stdin
         if (child.stdin) {
-            child.stdin.write(message);
+            logger.debug(`Sending message to cursor agent: ${message.substring(0, 50)}...`);
+            child.stdin.write(message + '\n');
             child.stdin.end();
         }
 
@@ -238,6 +247,8 @@ export async function executeCursorAgentStream(
         child.stderr?.on('data', (data) => {
             const stderrText = data.toString().trim();
             if (!stderrText) return;
+
+            logger.debug(`[Cursor Stderr] ${stderrText}`);
 
             let type: 'info' | 'warning' | 'error' = 'info';
             let logLevel: 'info' | 'warn' | 'error' = 'info';
@@ -262,6 +273,7 @@ export async function executeCursorAgentStream(
 
         // Handle process completion
         child.on('close', (code) => {
+            logger.info(`Cursor agent process exited with code ${code}`, { sessionId });
             clearTimeout(timeoutId);
             if (config.signal) {
                 config.signal.removeEventListener('abort', onAbort);
@@ -281,6 +293,7 @@ export async function executeCursorAgentStream(
         });
 
         child.on('error', (error) => {
+            logger.error(`Failed to start cursor agent: ${error.message}`, error);
             clearTimeout(timeoutId);
             if (config.signal) {
                 config.signal.removeEventListener('abort', onAbort);

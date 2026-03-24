@@ -9,6 +9,9 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import http from 'node:http';
+import https from 'node:https';
+import { URL } from 'node:url';
 
 const RETRY_STATUS_CODES = [408, 425, 429, 500, 502, 503, 504];
 
@@ -176,79 +179,132 @@ export class A2AClient {
             messageLength: request.message.length,
             selectedCodeLength: request.context?.selectedCode?.length ?? 0
         };
-        Logger.debug(`POST ${url}`, JSON.stringify(redactedRequest));
+        Logger.info(`POST ${url}`, JSON.stringify(redactedRequest));
 
-        try {
-            const response = await ofetch.raw(url, {
-                method: 'POST',
-                headers,
-                body: request,
-                retry: retryCount,
-                retryDelay: 1000,
-                retryStatusCodes: RETRY_STATUS_CODES,
-                signal: abortSignal,
-                ignoreResponseError: true,
-                responseType: 'stream',
-            });
-
-            Logger.debug(`Response ${response.status} ${response.statusText}`);
-
-            if (!response.ok) {
-                throw new APICallError({
-                    message: `HTTP error ${response.status}: ${response.statusText}`,
-                    url,
-                    requestBodyValues: request,
-                    statusCode: response.status,
-                    isRetryable: RETRY_STATUS_CODES.includes(response.status),
-                });
+        if (abortSignal) {
+            if (abortSignal.aborted) {
+                Logger.warn(`[A2AClient] Signal already aborted before fetch! Reason: ${abortSignal.reason}`);
             }
-
-            const responseHeaders: Record<string, string> = {};
-            response.headers.forEach((value, key) => { responseHeaders[key] = value; });
-
-            return {
-                stream: response._data as ReadableStream<Uint8Array>,
-                status: response.status,
-                headers: responseHeaders,
-            };
-        } catch (error) {
-            if (error instanceof APICallError) throw error;
-
-            let statusCode: number | undefined;
-            let responseBody: string | undefined;
-            let errorCode: string | undefined;
-
-            if (error instanceof FetchError) {
-                statusCode = error.response?.status;
-                errorCode = (error as any).code;
-                try { responseBody = await error.response?.text(); } catch { /**/ }
-            } else if (error instanceof Error) {
-                errorCode = (error as any).code;
-            }
-
-            const errMsg = error instanceof Error ? error.message : String(error);
-
-            // cursor-agent-a2a が未インストールまたはサーバー未起動の判定
-            if (errMsg.includes('ECONNREFUSED')) {
-                Logger.warn(
-                    `cursor-agent-a2a server connection refused at ${url}. ` +
-                    `Is the server running? Try: cursor-agent-a2a start --port ${this.config.port}`
-                );
-            }
-
-            const isTransient = statusCode 
-                ? RETRY_STATUS_CODES.includes(statusCode)
-                : (errorCode ? ['ETIMEDOUT', 'EAI_AGAIN', 'ECONNRESET'].includes(errorCode) : false);
-
-            throw new APICallError({
-                message: errMsg,
-                url,
-                requestBodyValues: request,
-                statusCode,
-                responseBody,
-                cause: error,
-                isRetryable: isTransient,
+            abortSignal.addEventListener('abort', () => {
+                Logger.warn(`[A2AClient] Request aborted by client signal during execution! Reason: ${abortSignal.reason}`);
             });
         }
+
+        let lastError: Error | undefined;
+        let statusCode: number | undefined;
+        let responseBody: string | undefined;
+
+        for (let attempt = 0; attempt <= retryCount; attempt++) {
+            try {
+                const response = await new Promise<ChatStreamResponse>((resolve, reject) => {
+                    const parsedUrl = new URL(url);
+                    const client = parsedUrl.protocol === 'https:' ? https : http;
+                    const requestBody = JSON.stringify(request);
+                    const reqOptions = {
+                        method: 'POST',
+                        headers: {
+                            ...headers,
+                            'Content-Length': Buffer.byteLength(requestBody)
+                        }
+                    };
+
+                    const req = client.request(parsedUrl, reqOptions, (res) => {
+                        const status = res.statusCode || 500;
+                        Logger.info(`Response ${status} ${res.statusMessage}`);
+
+                        if (status >= 400) {
+                            let body = '';
+                            res.on('data', chunk => { body += chunk; });
+                            res.on('end', () => {
+                                const err = new Error(`HTTP error ${status}: ${res.statusMessage}`);
+                                (err as any).status = status;
+                                (err as any).body = body;
+                                reject(err);
+                            });
+                            return;
+                        }
+
+                        const responseHeaders: Record<string, string> = {};
+                        for (const [key, value] of Object.entries(res.headers)) {
+                            if (Array.isArray(value)) {
+                                responseHeaders[key] = value.join(', ');
+                            } else if (value) {
+                                responseHeaders[key] = value;
+                            }
+                        }
+
+                        const stream = new ReadableStream<Uint8Array>({
+                            start(controller) {
+                                res.on('data', chunk => controller.enqueue(chunk));
+                                res.on('end', () => controller.close());
+                                res.on('error', err => controller.error(err));
+                                if (abortSignal) {
+                                    abortSignal.addEventListener('abort', () => {
+                                        res.destroy();
+                                    });
+                                }
+                            },
+                            cancel() {
+                                res.destroy();
+                            }
+                        });
+
+                        resolve({
+                            stream,
+                            status,
+                            headers: responseHeaders
+                        });
+                    });
+
+                    req.on('error', err => reject(err));
+
+                    if (abortSignal) {
+                        abortSignal.addEventListener('abort', () => {
+                            req.destroy(new Error('AbortError'));
+                        });
+                    }
+
+                    req.write(requestBody);
+                    req.end();
+                });
+
+                return response;
+            } catch (error) {
+                if (error instanceof APICallError) throw error;
+                lastError = error as Error;
+                
+                statusCode = (error as any).status;
+                responseBody = (error as any).body;
+                const errorCode = (error as any).cause?.code || (error as any).code || (error instanceof Error && error.message === 'AbortError' ? 'AbortError' : undefined);
+                
+                const isTransient = errorCode ? ['ETIMEDOUT', 'EAI_AGAIN', 'ECONNRESET', 'ECONNREFUSED'].includes(errorCode) || (statusCode && RETRY_STATUS_CODES.includes(statusCode)) : false;
+
+                if (isTransient && attempt < retryCount) {
+                    Logger.warn(`Retrying request due to network error/status ${statusCode || errorCode} (attempt ${attempt + 1}/${retryCount})`);
+                    await new Promise(r => setTimeout(r, 1000));
+                    continue;
+                }
+
+                const errMsg = error instanceof Error ? error.message : String(error);
+                if (errMsg.includes('ECONNREFUSED')) {
+                    Logger.warn(
+                        `cursor-agent-a2a server connection refused at ${url}. ` +
+                        `Is the server running? Try: cursor-agent-a2a start --port ${this.config.port}`
+                    );
+                }
+
+                throw new APICallError({
+                    message: errMsg,
+                    url,
+                    requestBodyValues: request,
+                    statusCode,
+                    responseBody,
+                    cause: error,
+                    isRetryable: isTransient,
+                });
+            }
+        }
+        
+        throw lastError;
     }
 }

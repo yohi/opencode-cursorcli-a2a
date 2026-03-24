@@ -57,22 +57,22 @@ export const logger = {
     debug: (msg: string, ...args: any[]) => {
         if (!shouldLog('debug')) return;
         const context = extractContext(...args);
-        console.debug(safeStringify({ ...context, level: 'debug', prefix: LOG_PREFIX, message: msg, timestamp: new Date().toISOString() }));
+        console.debug(safeStringify({ level: 'debug', prefix: LOG_PREFIX, message: msg, timestamp: new Date().toISOString(), ...context }));
     },
     info: (msg: string, ...args: any[]) => {
         if (!shouldLog('info')) return;
         const context = extractContext(...args);
-        console.info(safeStringify({ ...context, level: 'info', prefix: LOG_PREFIX, message: msg, timestamp: new Date().toISOString() }));
+        console.info(safeStringify({ level: 'info', prefix: LOG_PREFIX, message: msg, timestamp: new Date().toISOString(), ...context }));
     },
     warn: (msg: string, ...args: any[]) => {
         if (!shouldLog('warn')) return;
         const context = extractContext(...args);
-        console.warn(safeStringify({ ...context, level: 'warn', prefix: LOG_PREFIX, message: msg, timestamp: new Date().toISOString() }));
+        console.warn(safeStringify({ level: 'warn', prefix: LOG_PREFIX, message: msg, timestamp: new Date().toISOString(), ...context }));
     },
     error: (msg: string, ...args: any[]) => {
         if (!shouldLog('error')) return;
         const context = extractContext(...args);
-        console.error(safeStringify({ ...context, level: 'error', prefix: LOG_PREFIX, message: msg, timestamp: new Date().toISOString() }));
+        console.error(safeStringify({ level: 'error', prefix: LOG_PREFIX, message: msg, timestamp: new Date().toISOString(), ...context }));
     },
     child: (baseContext: Record<string, any>) => ({
         debug: (msg: string, ...args: any[]) => logger.debug(msg, { ...baseContext, ...extractContext(...args) }),
@@ -82,5 +82,4 @@ export const logger = {
     })
 };
 
-// a2a-client.ts などのために Logger (大文字) もエクスポート
 export const Logger = logger;
