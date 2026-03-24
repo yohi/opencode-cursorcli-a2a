@@ -232,8 +232,8 @@ export class ServerManager {
                 ...config.env,
             };
 
-            const isJs = /\.(js|mjs|cjs|ts)$/.test(serverPath);
-            const isTs = serverPath.endsWith('.ts');
+            const isJs = /\.(js|mjs|cjs|ts|tsx|mts|cts)$/.test(serverPath);
+            const isTs = /\.(ts|tsx|mts|cts)$/.test(serverPath);
             
             let cmd: string;
             let args: string[];
@@ -270,7 +270,6 @@ export class ServerManager {
             const pollMs = config.pollIntervalMs ?? 200;
             const timeoutMs = config.startupTimeoutMs ?? 15000;
 
-            this.startingProcs.add(proc);
             try {
                 await new Promise<void>((resolve, reject) => {
                     const timeoutId = setTimeout(() => {
@@ -309,7 +308,6 @@ export class ServerManager {
             // 起動成功後に登録
             const entry: ManagedServer = { proc, port, host, refCount: 0, shell }; 
             this.servers.set(key, entry);
-            this.registerCleanup();
 
             const cleanupExit = () => {
                 if (this.servers.get(key)?.proc === proc) {
