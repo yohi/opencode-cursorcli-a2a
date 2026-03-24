@@ -163,7 +163,8 @@ function buildMessageText(prompt: LanguageModelV1Prompt, options?: MapPromptOpti
             for (const result of msg.content) {
                 const r = result as any;
                 const label = r.toolName ?? r.toolCallId ?? 'unknown';
-                const content = JSON.stringify(r.result ?? r, null, 2);
+                const resultValue = (r && typeof r === 'object' && 'result' in r) ? r.result : r;
+                const content = JSON.stringify(resultValue, null, 2);
                 parts.push(`[Tool Result: ${label}]\n${content}`);
             }
         }

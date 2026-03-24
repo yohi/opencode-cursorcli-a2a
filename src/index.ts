@@ -95,6 +95,13 @@ export function createCursorA2AProvider(options?: OpenCodeProviderOptions): Curs
         return { text: result.text || '' };
     };
     fn.dispose = async () => {
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        for (const [_, provider] of providers) {
+            if (typeof (provider as any).dispose === 'function') {
+                await (provider as any).dispose();
+            }
+        }
+        providers.clear();
         ServerManager.getInstance().dispose();
     };
 

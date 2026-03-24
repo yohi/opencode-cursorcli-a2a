@@ -226,7 +226,11 @@ export class OpenCodeCursorA2AProvider {
         let sessionId: string | undefined;
         const opencodeMetadata = options.providerMetadata?.['opencode'];
         if (opencodeMetadata && typeof opencodeMetadata === 'object' && 'sessionId' in opencodeMetadata) {
-            sessionId = String(opencodeMetadata['sessionId']).trim();
+            const raw = opencodeMetadata['sessionId'];
+            if (raw !== null && raw !== undefined) {
+                const s = String(raw).trim();
+                if (s !== '') sessionId = s;
+            }
         }
         if (!sessionId) sessionId = `cursor-session-${crypto.randomUUID()}`;
 
@@ -256,7 +260,11 @@ export class OpenCodeCursorA2AProvider {
 
         let idempotencyKey: string | undefined;
         if (opencodeMetadata && typeof opencodeMetadata === 'object' && 'idempotencyKey' in opencodeMetadata) {
-            idempotencyKey = String(opencodeMetadata['idempotencyKey']);
+            const raw = opencodeMetadata['idempotencyKey'];
+            if (raw !== null && raw !== undefined) {
+                const s = String(raw).trim();
+                if (s !== '') idempotencyKey = s;
+            }
         }
 
         let responseStream: ReadableStream<Uint8Array>;
