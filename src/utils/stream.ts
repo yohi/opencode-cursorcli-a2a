@@ -23,6 +23,7 @@ async function* parseSSEStream<T>(
 
     if (abortSignal) {
         if (abortSignal.aborted) {
+            reader.cancel(abortSignal.reason).catch(() => {});
             reader.releaseLock();
             throw abortSignal.reason || new Error('AbortError');
         }

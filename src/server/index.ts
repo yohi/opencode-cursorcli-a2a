@@ -134,29 +134,69 @@ app.post('/:projectId/messages', authMiddleware, async (req: express.Request, re
             await executeCursorAgentStream(message, { workspace, sessionId, model, signal: controller.signal }, (event: any) => {
                 if (event.sessionId) capturedSessionId = event.sessionId;
 
+                // 書き込み可能かチェック
+                if (res.destroyed || !res.writable || controller.signal.aborted) {
+                    return;
+                }
+
                 // イベントの正規化 (CursorAgentStreamEventSchema に適合させる)
-                let normalizedEvent = event;
-                if (event.type === 'tool_use' || event.type === 'info' || event.type === 'warning') {
+                let normalizedEvent: any = null;
+
+                const eventType = event.type;
+                if (eventType === 'text' || eventType === 'message' || eventType === 'thinking' || eventType === 'reasoning' || eventType === 'result' || eventType === 'done' || eventType === 'complete') {
+                    normalizedEvent = event;
+                } else if (eventType === 'tool_call') {
                     normalizedEvent = {
-                        type: event.type,
-                        message: event.content || event.message || String(event)
+                        type: 'tool_call',
+                        name: event.name || event.toolName || 'unknown',
+                        arguments: event.arguments || event.parameters || {},
+                        callId: event.callId || event.toolCallId
+                    };
+                } else if (eventType === 'tool_result') {
+                    normalizedEvent = {
+                        type: 'tool_result',
+                        callId: event.callId || event.toolCallId,
+                        result: event.result
+                    };
+                } else if (eventType === 'error') {
+                    normalizedEvent = {
+                        type: 'error',
+                        message: event.message || String(event.error || 'Unknown error'),
+                        code: event.code
+                    };
+                } else if (eventType === 'tool_use' || eventType === 'info' || eventType === 'warning') {
+                    // 非標準イベントを message にマップ
+                    normalizedEvent = {
+                        type: 'message',
+                        content: `[${eventType}] ${event.content || event.message || JSON.stringify(event)}`
                     };
                 } else if (event instanceof Error) {
                     normalizedEvent = {
                         type: 'error',
                         message: event.message
                     };
+                } else {
+                    // その他は message として扱う
+                    normalizedEvent = {
+                        type: 'message',
+                        content: typeof event === 'string' ? event : JSON.stringify(event)
+                    };
                 }
 
-                const chunk = `data: ${JSON.stringify(normalizedEvent)}\n\n`;
-                res.write(chunk);
+                if (normalizedEvent) {
+                    const chunk = `data: ${JSON.stringify(normalizedEvent)}\n\n`;
+                    res.write(chunk);
+                }
             });
-            res.write(`data: ${JSON.stringify({ type: 'done', sessionId: capturedSessionId })}\n\n`);
-            res.end();
+
+            if (!res.destroyed && res.writable && !controller.signal.aborted) {
+                res.write(`data: ${JSON.stringify({ type: 'done', sessionId: capturedSessionId })}\n\n`);
+                res.end();
+            }
             return;
         } catch (error) {
-            if (controller.signal.aborted) {
-                res.end();
+            if (controller.signal.aborted || res.destroyed || !res.writable) {
+                if (!res.writableEnded) res.end();
                 return;
             }
             const errorMessage = error instanceof Error ? error.message : String(error);

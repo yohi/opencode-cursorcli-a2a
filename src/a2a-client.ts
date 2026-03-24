@@ -93,7 +93,7 @@ export class A2AClient {
     }
 
     /** `/projects` エンドポイントを使用して projectId を取得または作成する */
-    private async resolveProjectId(workspace: string = process.cwd()): Promise<string> {
+    private async resolveProjectId(workspace: string = process.cwd(), abortSignal?: AbortSignal): Promise<string> {
         const token = this.getToken();
         const isSecure = this.isSecureEndpoint();
 
@@ -113,7 +113,7 @@ export class A2AClient {
 
         try {
             // 1. 既存のプロジェクト一覧を取得して一致する workspace を探す
-            const response = await ofetch(`${this.baseUrl}/projects`, { headers, retry: 1 });
+            const response = await ofetch(`${this.baseUrl}/projects`, { headers, retry: 1, signal: abortSignal });
             const projects = response.projects || [];
             const existing = projects.find((p: any) => p.workspace === workspace);
             if (existing) {
@@ -125,7 +125,8 @@ export class A2AClient {
             const createRes = await ofetch(`${this.baseUrl}/projects`, {
                 method: 'POST',
                 headers,
-                body: { name: projectName, workspace }
+                body: { name: projectName, workspace },
+                signal: abortSignal
             });
             return createRes.id;
         } catch (error) {
@@ -166,7 +167,7 @@ export class A2AClient {
 
         try {
             const effectiveWorkspace = request.context?.workspace || workspace || process.cwd();
-            const projectId = await this.resolveProjectId(effectiveWorkspace);
+            const projectId = await this.resolveProjectId(effectiveWorkspace, abortSignal);
             
             // resolveProjectId の後にアボートされていないか再チェック
             if (abortSignal?.aborted) {
@@ -222,11 +223,10 @@ export class A2AClient {
                                 ...headers,
                                 'Content-Length': Buffer.byteLength(requestBody)
                             },
-                            // SSEのためにソケットタイムアウトを無効化（または大幅に延長）
-                            timeout: 0 
                         };
 
                         const req = client.request(parsedUrl, reqOptions, (res) => {
+                            clearTimeout(connectTimer);
                             const status = res.statusCode || 500;
                             Logger.info(`Response ${status} ${res.statusMessage}`);
 
@@ -282,11 +282,18 @@ export class A2AClient {
                         });
 
                         const onAbortReq = () => {
+                            clearTimeout(connectTimer);
                             req.destroy(new Error('AbortError'));
                         };
 
-                        // 接続確立までのタイムアウトを管理（必要に応じて実装）
+                        // 接続確立 (TTFB) までのタイムアウト
+                        const connectTimer = setTimeout(() => {
+                            req.destroy(new Error('TimeoutError'));
+                            reject(new Error('TimeoutError'));
+                        }, 30000);
+
                         req.on('error', err => {
+                            clearTimeout(connectTimer);
                             abortSignal?.removeEventListener('abort', onAbortReq);
                             reject(err);
                         });
@@ -317,18 +324,18 @@ export class A2AClient {
                         
                         // アボート可能なバックオフ待機
                         await new Promise<void>((resolveWait, rejectWait) => {
-                            const timer = setTimeout(resolveWait, 1000);
+                            const timer = setTimeout(() => {
+                                if (abortSignal) abortSignal.removeEventListener('abort', onAbortWait);
+                                resolveWait();
+                            }, 1000);
+
+                            const onAbortWait = () => {
+                                clearTimeout(timer);
+                                rejectWait(abortSignal?.reason || new Error('AbortError'));
+                            };
+
                             if (abortSignal) {
-                                const onAbortWait = () => {
-                                    clearTimeout(timer);
-                                    rejectWait(abortSignal.reason || new Error('AbortError'));
-                                };
                                 abortSignal.addEventListener('abort', onAbortWait, { once: true });
-                                // 待機終了後にリスナーを解除するためにラップ
-                                resolveWait = ((originalResolve) => () => {
-                                    abortSignal.removeEventListener('abort', onAbortWait);
-                                    originalResolve();
-                                })(resolveWait);
                             }
                         });
                         continue;
