@@ -345,8 +345,12 @@ export class ServerManager {
         const makeSignalHandler = (signal: NodeJS.Signals) => () => {
             logger.info(`[ServerManager] Received ${signal}, cleaning up...`);
             try { this.dispose(); } catch { /**/ }
-            const h = this.cleanupHandlers.find(ch => ch.event === signal);
-            if (h) process.off(signal, h.handler as NodeJS.SignalsListener);
+            const handlersForSignal = this.cleanupHandlers.filter(ch => ch.event === signal);
+            for (const h of handlersForSignal) {
+                process.off(signal, h.handler as NodeJS.SignalsListener);
+            }
+            // Remove them from array to be safe
+            this.cleanupHandlers = this.cleanupHandlers.filter(ch => ch.event !== signal);
             process.kill(process.pid, signal);
         };
 

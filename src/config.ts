@@ -5,7 +5,7 @@ import type { SessionStore } from './session.js';
 import type { FallbackConfig } from './fallback.js';
 import { readFileSync, watch, existsSync } from 'node:fs';
 import path from 'node:path';
-import { Logger } from './utils/logger.js';
+import { logger as Logger } from './utils/logger.js';
 
 // ---------------------------------------------------------------------------
 // CursorCLI 固有のコンテキスト設定
@@ -194,14 +194,36 @@ export class ConfigManager {
             this.configWatcher = watch(this.configPath, (event) => {
                 if (event === 'change' || event === 'rename') {
                     if (this._changeTimer) clearTimeout(this._changeTimer);
+                    
+                    const fileExists = existsSync(this.configPath);
+                    
                     this._changeTimer = setTimeout(() => {
                         Logger.info(`[ConfigManager] Config file ${event}, reloading...`);
-                        this.load();
-                        if (event === 'rename' && existsSync(this.configPath)) {
-                            this.stopWatch();
-                            this.watch(true);
+                        
+                        let loadSuccess = false;
+                        try {
+                            // If it's a rename and the file doesn't exist, we skip load to avoid errors
+                            if (event !== 'rename' || fileExists || existsSync(this.configPath)) {
+                                this.load();
+                                loadSuccess = true;
+                            }
+                        } catch (err) {
+                            Logger.error(`[ConfigManager] Error during config reload:`, err);
                         }
-                        for (const cb of this.watchers) cb();
+
+                        if (event === 'rename') {
+                            if (loadSuccess && existsSync(this.configPath)) {
+                                this.stopWatch();
+                                // wait slightly before re-watching to avoid loops
+                                setTimeout(() => this.watch(true), 50);
+                            } else {
+                                this.stopWatch();
+                            }
+                        }
+                        
+                        if (loadSuccess) {
+                            for (const cb of this.watchers) cb();
+                        }
                     }, 300);
                 }
             });
@@ -306,7 +328,7 @@ export function resolveConfig(options?: OpenCodeProviderOptions): A2AConfig & {
 
     const mergedConfig = {
         host: getNormalizedValue(options?.host) ?? external.host ?? envHost,
-        port: (typeof options?.port === 'number' ? options.port : (typeof options?.port === 'string' ? Number(getNormalizedValue(options.port)) : undefined)) ?? external.port ?? envPort,
+        port: options?.port ?? external.port ?? envPort,
         token: getNormalizedValue(options?.token) ?? external.token ?? envToken,
         protocol: (getNormalizedValue(options?.protocol) ?? external.protocol ?? envProtocol) as 'http' | 'https' | undefined,
         generationConfig: options?.generationConfig,
