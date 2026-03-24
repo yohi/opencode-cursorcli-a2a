@@ -61,7 +61,7 @@ describe('A2AClient', () => {
     });
 
     it('should send request with idempotency key and retry=3', async () => {
-        vi.mocked(ofetch.raw).mockResolvedValue(createMockResponse(true, 200) as unknown);
+        vi.mocked(ofetch.raw).mockResolvedValue(createMockResponse(true, 200) as any);
         await client.chatStream({ request: mockRequest, idempotencyKey: 'test-key' });
         expect(ofetch.raw).toHaveBeenCalledWith(
             expectedUrl,
@@ -82,7 +82,7 @@ describe('A2AClient', () => {
     });
 
     it('should send request without idempotency key and retry=0', async () => {
-        vi.mocked(ofetch.raw).mockResolvedValue(createMockResponse(true, 200) as unknown);
+        vi.mocked(ofetch.raw).mockResolvedValue(createMockResponse(true, 200) as any);
         await client.chatStream({ request: mockRequest });
         expect(ofetch.raw).toHaveBeenCalledWith(
             expectedUrl,
@@ -92,7 +92,7 @@ describe('A2AClient', () => {
 
     it('should use token in Authorization header for localhost', async () => {
         const tokenClient = new A2AClient({ ...mockConfig, token: 'secret-cursor-token' });
-        vi.mocked(ofetch.raw).mockResolvedValue(createMockResponse(true, 200) as unknown);
+        vi.mocked(ofetch.raw).mockResolvedValue(createMockResponse(true, 200) as any);
         await tokenClient.chatStream({ request: mockRequest });
         expect(ofetch.raw).toHaveBeenCalledWith(
             expect.any(String),
@@ -105,7 +105,7 @@ describe('A2AClient', () => {
     });
 
     it('should throw APICallError on non-ok response', async () => {
-        vi.mocked(ofetch.raw).mockResolvedValue(createMockResponse(false, 500) as unknown);
+        vi.mocked(ofetch.raw).mockResolvedValue(createMockResponse(false, 500) as any);
         await expect(client.chatStream({ request: mockRequest })).rejects.toThrow(APICallError);
         await expect(client.chatStream({ request: mockRequest })).rejects.toThrow('HTTP error 500');
     });
@@ -117,7 +117,7 @@ describe('A2AClient', () => {
     });
 
     it('should send with custom traceId if provided', async () => {
-        vi.mocked(ofetch.raw).mockResolvedValue(createMockResponse(true, 200) as unknown);
+        vi.mocked(ofetch.raw).mockResolvedValue(createMockResponse(true, 200) as any);
         await client.chatStream({ request: mockRequest, traceId: 'trace-123' });
         expect(ofetch.raw).toHaveBeenCalledWith(
             expect.any(String),
@@ -129,7 +129,7 @@ describe('A2AClient', () => {
 
     it('should build correct endpoint URL with default port 4937', async () => {
         const c = new A2AClient({ host: '127.0.0.1', port: 4937, protocol: 'http' });
-        vi.mocked(ofetch.raw).mockResolvedValue(createMockResponse(true, 200) as unknown);
+        vi.mocked(ofetch.raw).mockResolvedValue(createMockResponse(true, 200) as any);
         await c.chatStream({ request: mockRequest });
         // cursor-agent-a2a は /messages?stream=true エンドポイントを使用
         expect(ofetch.raw).toHaveBeenCalledWith('http://127.0.0.1:4937/default/messages?stream=true', expect.any(Object));

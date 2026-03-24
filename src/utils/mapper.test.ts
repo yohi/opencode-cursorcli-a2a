@@ -7,7 +7,7 @@ import {
     CursorA2AStreamMapper,
     A2AStreamMapper,
 } from './mapper';
-import type { LanguageModelV1Prompt } from '@ai-sdk/provider';
+import type { LanguageModelV2Prompt as LanguageModelV1Prompt } from '@ai-sdk/provider';
 
 // ---------------------------------------------------------------------------
 // mapPromptToCursorRequest (新 REST API)

@@ -1,5 +1,5 @@
 // src/session.ts
-import { Logger } from './utils/logger.js';
+import { logger as Logger } from './utils/logger.js';
 
 export interface A2ASession {
     contextId?: string;
@@ -61,10 +61,12 @@ export class InMemorySessionStore implements SessionStore {
     }
 
     private evictIfNeeded(): void {
-        if (this.sessions.size > this.maxEntries) {
+        while (this.sessions.size >= this.maxEntries) {
             const oldestKey = this.sessions.keys().next().value;
             if (oldestKey !== undefined) {
                 this.sessions.delete(oldestKey);
+            } else {
+                break;
             }
         }
     }
@@ -98,11 +100,11 @@ export class InMemorySessionStore implements SessionStore {
             this.sessions.delete(sessionId);
             this.sessions.set(sessionId, entry);
         } else {
+            this.evictIfNeeded();
             this.sessions.set(sessionId, {
                 session: { ...patch },
                 lastAccessedAt: Date.now(),
             });
-            this.evictIfNeeded();
         }
     }
 
@@ -124,6 +126,8 @@ export class InMemorySessionStore implements SessionStore {
 
     async prune(): Promise<void> {
         const now = Date.now();
+        // NOTE: Deleting from a Map during iteration is safe in JavaScript/V8.
+        // It follows the insertion order and the iterator is not invalidated by deletions.
         for (const [key, entry] of this.sessions.entries()) {
             if (now - entry.lastAccessedAt > this.ttlMs) {
                 this.sessions.delete(key);

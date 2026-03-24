@@ -1,5 +1,5 @@
 // src/session.test.ts
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { InMemorySessionStore } from './session';
 
 describe('InMemorySessionStore', () => {
@@ -7,6 +7,10 @@ describe('InMemorySessionStore', () => {
 
     beforeEach(() => {
         store = new InMemorySessionStore({ ttlMs: 1000, maxEntries: 5 });
+    });
+
+    afterEach(() => {
+        vi.useRealTimers();
     });
 
     it('should return undefined for a non-existent session', async () => {
@@ -50,9 +54,10 @@ describe('InMemorySessionStore', () => {
     });
 
     it('should expire sessions after TTL', async () => {
-        const shortTtlStore = new InMemorySessionStore({ ttlMs: 1 });
+        vi.useFakeTimers();
+        const shortTtlStore = new InMemorySessionStore({ ttlMs: 10 });
         await shortTtlStore.update('session-1', { contextId: 'ctx-abc' });
-        await new Promise(r => setTimeout(r, 10));
+        vi.advanceTimersByTime(20);
         const session = await shortTtlStore.get('session-1');
         expect(session).toBeUndefined();
     });
@@ -75,11 +80,12 @@ describe('InMemorySessionStore', () => {
     });
 
     it('should prune expired sessions', async () => {
-        const store2 = new InMemorySessionStore({ ttlMs: 1 });
+        vi.useFakeTimers();
+        const store2 = new InMemorySessionStore({ ttlMs: 100 });
         await store2.update('s1', { contextId: 'x' });
-        await new Promise(r => setTimeout(r, 10));
+        vi.advanceTimersByTime(200);
         await store2.update('s2', { contextId: 'y' });
-        await store2.prune!();
+        await store2.prune();
         expect(await store2.get('s1')).toBeUndefined();
         expect(await store2.get('s2')).toBeDefined();
     });
