@@ -87,8 +87,9 @@ app.post('/projects', authMiddleware, (req: express.Request, res: express.Respon
     if (typeof workspace !== 'string' || workspace.trim().length === 0) {
         return res.status(400).json({ error: 'Missing or invalid workspace' });
     }
+    const trimmedWorkspace = workspace.trim();
     const id = `p-${crypto.randomBytes(4).toString('hex')}`;
-    const newProject = { id, workspace, name: name || id };
+    const newProject = { id, workspace: trimmedWorkspace, name: name || id };
     projects.push(newProject);
     res.json(newProject);
 });
@@ -101,8 +102,8 @@ app.post('/:projectId/messages', authMiddleware, async (req: express.Request, re
 
     logger.info('Processing request', { projectId, sessionId: sessionId || 'new', stream });
 
-    if (!message) {
-        return res.status(400).json({ error: 'Missing message' });
+    if (typeof message !== 'string' || message.trim().length === 0) {
+        return res.status(400).json({ error: 'Missing or invalid message' });
     }
 
     const project = projects.find(p => p.id === projectId);
