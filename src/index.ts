@@ -84,15 +84,15 @@ export function createCursorA2AProvider(options?: OpenCodeProviderOptions): Curs
     fn.providerId = 'opencode-cursorcli-a2a';
 
     // Support for simple generate/dispose interface if needed
-    fn.generate = async (prompt: string, config: any = {}) => {
-        const modelId = options?.cursorModel && options.cursorModel !== '' ? options.cursorModel : 'auto';
-        const model = createModel(modelId, config);
+    fn.generate = async (prompt: string, config?: any) => {
+        const modelId = config?.cursorModel || (options?.cursorModel && options.cursorModel !== '' ? options.cursorModel : 'auto');
+        const model = config ? createModel(modelId, config) : createModel(modelId);
         const result = await (model as any).doGenerate({
             inputFormat: 'prompt',
             mode: { type: 'regular' },
             prompt: [{ role: 'user', content: [{ type: 'text', text: prompt }] }],
         });
-        return { text: result.text || '' };
+        return { text: (result as any).text || '' };
     };
     fn.dispose = async () => {
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -102,7 +102,6 @@ export function createCursorA2AProvider(options?: OpenCodeProviderOptions): Curs
             }
         }
         providers.clear();
-        ServerManager.getInstance().dispose();
     };
 
     return fn as unknown as CursorA2AProvider;
