@@ -294,6 +294,8 @@ export class CursorA2AStreamMapper {
                 if (event.sessionId) this._sessionId = event.sessionId;
                 
                 let metadata: Record<string, unknown> = {};
+                
+                // 1. メタデータ (usage) の抽出
                 if (event.type === 'complete') {
                     metadata = (event.metadata ?? {}) as Record<string, unknown>;
                 } else if (event.type === 'result' && event.data && typeof event.data === 'object') {
@@ -307,7 +309,6 @@ export class CursorA2AStreamMapper {
                         };
                     }
                     
-                    // If we haven't accumulated any text, and result contains the final text, yield it.
                     if (this._textAccum.length === 0 && typeof data.result === 'string') {
                         const newText = data.result;
                         this._textAccum = newText;
@@ -317,26 +318,26 @@ export class CursorA2AStreamMapper {
                             delta: newText,
                         } as LanguageModelV1StreamPart);
                     }
+                } else if (event.type === 'done') {
+                    // 'done' に metadata が含まれる可能性を考慮
+                    metadata = (event as any).metadata ?? {};
                 }
 
                 this._promptTokens = (metadata['promptTokens'] as number | undefined) ?? this._promptTokens;
                 this._completionTokens = (metadata['completionTokens'] as number | undefined) ?? this._completionTokens;
                 
-                // If this is a final marker, emit finish
-                if (event.type === 'complete' || event.type === 'done' || event.type === 'result') {
-                    // Prevent duplicate finish events if result and done come in sequence
-                    if (this._lastFinishReason !== 'stop') {
-                        this._lastFinishReason = 'stop';
-                        parts.push({
-                            type: 'finish',
-                            finishReason: 'stop',
-                            usage: {
-                                inputTokens: { total: this._promptTokens },
-                                outputTokens: { total: this._completionTokens },
-                            },
-                            providerMetadata: Object.keys(metadata).length > 0 ? { 'cursor-agent': metadata } : undefined,
-                        } as ExtendedFinishPart);
-                    }
+                // 2. 終了パーツの追加 (二重発行を防止)
+                if (this._lastFinishReason !== 'stop') {
+                    this._lastFinishReason = 'stop';
+                    parts.push({
+                        type: 'finish',
+                        finishReason: 'stop',
+                        usage: {
+                            inputTokens: { total: this._promptTokens },
+                            outputTokens: { total: this._completionTokens },
+                        },
+                        providerMetadata: Object.keys(metadata).length > 0 ? { 'cursor-agent': metadata } : undefined,
+                    } as ExtendedFinishPart);
                 }
                 break;
             }

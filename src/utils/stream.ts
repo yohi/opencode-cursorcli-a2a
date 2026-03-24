@@ -93,13 +93,12 @@ export function parseCursorA2AStream(
         }
 
         /**
-        * 旧 A2A JSON-RPC ストリームパーサー。
-        */
+         * 旧 A2A JSON-RPC ストリームパーサー。
+         */
         export function parseA2AStream(
-        reader: ReadableStreamDefaultReader<Uint8Array>,
+            stream: ReadableStream<Uint8Array>,
         ): AsyncIterable<A2AJsonRpcResponse> {
-        return parseSSEStream(reader, (dataStr) => {
-        try {
+            return parseSSEStream(stream, (dataStr) => {        try {
             const parsed = JSON.parse(dataStr);
             return RpcResponseSchema.parse(parsed);
         } catch (e) {
