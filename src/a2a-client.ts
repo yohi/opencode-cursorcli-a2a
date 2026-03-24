@@ -167,7 +167,42 @@ export class A2AClient {
         try {
             const effectiveWorkspace = request.context?.workspace || workspace || process.cwd();
             const projectId = await this.resolveProjectId(effectiveWorkspace);
+            
+            // resolveProjectId の後にアボートされていないか再チェック
+            if (abortSignal?.aborted) {
+                throw abortSignal.reason || new Error('AbortError');
+            }
+
             const url = `${this.baseUrl}/${projectId}/messages?stream=true`;
+
+            const headers: Record<string, string> = {
+                'Content-Type': 'application/json',
+                'Accept': 'text/event-stream',
+                'x-a2a-trace-id': finalTraceId,
+            };
+
+            if (idempotencyKey) {
+                headers['Idempotency-Key'] = idempotencyKey;
+            }
+
+            if (token && isSecure) {
+                headers['Authorization'] = `Bearer ${token}`;
+            }
+
+            const retryCount = idempotencyKey ? 3 : 0;
+            const redactedRequest = {
+                model: request.model ?? '(default)',
+                traceId: finalTraceId,
+                workspace: effectiveWorkspace,
+                messageLength: request.message.length,
+                selectedCodeLength: request.context?.selectedCode?.length ?? 0
+            };
+            Logger.info(`POST ${url}`, JSON.stringify(redactedRequest));
+
+            let lastError: Error | undefined;
+            let statusCode: number | undefined;
+            let responseBody: string | undefined;
+
             for (let attempt = 0; attempt <= retryCount; attempt++) {
                 try {
                     const response = await new Promise<ChatStreamResponse>((resolve, reject) => {

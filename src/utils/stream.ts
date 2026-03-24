@@ -65,7 +65,7 @@ async function* parseSSEStream<T>(
             }
         }
 
-        if (buffer.trim()) {
+        if (!abortSignal?.aborted && buffer.trim()) {
             const dataStr = buffer.trim().startsWith('data:')
                 ? buffer.trim().slice(5).trim()
                 : buffer.trim();
