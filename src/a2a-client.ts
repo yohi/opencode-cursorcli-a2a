@@ -187,6 +187,7 @@ export class A2AClient {
         if (abortSignal) {
             if (abortSignal.aborted) {
                 Logger.warn(`[A2AClient] Signal already aborted before fetch! Reason: ${abortSignal.reason}`);
+                throw abortSignal.reason || new Error('AbortError');
             }
             abortSignal.addEventListener('abort', onAbortOuter, { once: true });
         }
@@ -207,7 +208,8 @@ export class A2AClient {
                             headers: {
                                 ...headers,
                                 'Content-Length': Buffer.byteLength(requestBody)
-                            }
+                            },
+                            timeout: 30000 // 30s timeout
                         };
 
                         const req = client.request(parsedUrl, reqOptions, (res) => {
@@ -269,6 +271,11 @@ export class A2AClient {
                             req.destroy(new Error('AbortError'));
                         };
 
+                        req.on('timeout', () => {
+                            req.destroy(new Error('TimeoutError'));
+                            reject(new Error('TimeoutError'));
+                        });
+
                         req.on('error', err => {
                             abortSignal?.removeEventListener('abort', onAbortReq);
                             reject(err);
@@ -289,11 +296,11 @@ export class A2AClient {
                     
                     statusCode = (error as any).status;
                     responseBody = (error as any).body;
-                    const errorCode = (error as any).cause?.code || (error as any).code || (error instanceof Error && error.message === 'AbortError' ? 'AbortError' : undefined);
+                    const errorCode = (error as any).cause?.code || (error as any).code || (error instanceof Error && (error.message === 'AbortError' || error.message === 'TimeoutError') ? error.message : undefined);
                     
                     const isTransient = 
                         (statusCode !== undefined && RETRY_STATUS_CODES.includes(statusCode)) ||
-                        (errorCode !== undefined && ['ETIMEDOUT', 'EAI_AGAIN', 'ECONNRESET', 'ECONNREFUSED'].includes(errorCode));
+                        (errorCode !== undefined && ['ETIMEDOUT', 'EAI_AGAIN', 'ECONNRESET', 'ECONNREFUSED', 'TimeoutError'].includes(errorCode));
 
                     if (isTransient && attempt < retryCount) {
                         Logger.warn(`Retrying request due to network error/status ${statusCode || errorCode} (attempt ${attempt + 1}/${retryCount})`);

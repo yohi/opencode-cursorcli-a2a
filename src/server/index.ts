@@ -81,8 +81,8 @@ app.get('/projects', authMiddleware, (_req: express.Request, res: express.Respon
 
 app.post('/projects', authMiddleware, (req: express.Request, res: express.Response) => {
     const { name, workspace } = req.body;
-    if (!workspace) {
-        return res.status(400).json({ error: 'Missing workspace' });
+    if (typeof workspace !== 'string' || workspace.trim().length === 0) {
+        return res.status(400).json({ error: 'Missing or invalid workspace' });
     }
     const id = `p-${crypto.randomBytes(4).toString('hex')}`;
     const newProject = { id, workspace, name: name || id };
@@ -103,7 +103,10 @@ app.post('/:projectId/messages', authMiddleware, async (req: express.Request, re
     }
 
     const project = projects.find(p => p.id === projectId);
-    const workspace = project?.workspace || process.env['CURSOR_WORKSPACE'] || process.cwd();
+    if (!project) {
+        return res.status(404).json({ error: `Project not found: ${projectId}` });
+    }
+    const workspace = project.workspace;
     let capturedSessionId = sessionId;
 
     if (stream) {
@@ -117,9 +120,9 @@ app.post('/:projectId/messages', authMiddleware, async (req: express.Request, re
         res.write(': connected\n\n');
 
         const controller = new AbortController();
-        req.on('close', () => {
+        res.on('close', () => {
             if (!res.writableEnded) {
-                logger.warn('Request connection closed prematurely by client, aborting agent', { projectId, sessionId });
+                logger.warn('Response connection closed prematurely by client, aborting agent', { projectId, sessionId });
                 controller.abort();
             }
         });
@@ -181,16 +184,25 @@ const server = app.listen(PORT, HOST, () => {
     logger.child({ host: HOST, port: PORT }).info('Internal Cursor A2A Server started');
 });
 
+const gracefulShutdown = (msg: string, err?: any) => {
+    logger.error(msg, err);
+    server.close(() => {
+        logger.info('Server closed');
+        process.exit(1);
+    });
+    // Force exit after 5s
+    setTimeout(() => {
+        logger.warn('Forced exit after timeout');
+        process.exit(1);
+    }, 5000);
+};
+
 server.on('error', (err) => {
-    logger.error('SERVER FAILED TO START:', err);
+    gracefulShutdown('SERVER ERROR:', err);
 });
 
 process.on('uncaughtException', (err) => {
-    logger.error('UNCAUGHT EXCEPTION:', err);
-    // Give some time for logs to be flushed before exiting
-    setTimeout(() => {
-        process.exit(1);
-    }, 100);
+    gracefulShutdown('UNCAUGHT EXCEPTION:', err);
 });
 
 process.on('unhandledRejection', (reason) => {

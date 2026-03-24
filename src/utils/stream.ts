@@ -82,28 +82,32 @@ export function parseCursorA2AStream(
             const parsed = JSON.parse(dataStr);
             return CursorAgentStreamEventSchema.parse(parsed);
         } catch (e) {
-            Logger.error(`Failed to parse cursor-agent-a2a SSE event`, { error: e, data: dataStr });
+            const dataLength = dataStr.length;
+            const dataPreview = dataStr.length > 100 ? dataStr.substring(0, 100) + '...' : dataStr;
+            Logger.error(`Failed to parse cursor-agent-a2a SSE event`, { error: e, dataLength, dataPreview });
             throw new Error(
-                `Failed to parse cursor-agent-a2a SSE event: ${e instanceof Error ? e.message : String(e)} -- data: ${dataStr}`,
+                `Failed to parse cursor-agent-a2a SSE event: ${e instanceof Error ? e.message : String(e)} -- data length: ${dataLength}, preview: ${dataPreview}`,
             );
         }
-    });
-}
+        });
+        }
 
-/**
- * 旧 A2A JSON-RPC ストリームパーサー。
- */
-export function parseA2AStream(
-    stream: ReadableStream<Uint8Array>,
-): AsyncGenerator<A2AJsonRpcResponse> {
-    return parseSSEStream(stream, (dataStr) => {
+        /**
+        * 旧 A2A JSON-RPC ストリームパーサー。
+        */
+        export function parseA2AStream(
+        reader: ReadableStreamDefaultReader<Uint8Array>,
+        ): AsyncIterable<A2AJsonRpcResponse> {
+        return parseSSEStream(reader, (dataStr) => {
         try {
             const parsed = JSON.parse(dataStr);
             return RpcResponseSchema.parse(parsed);
         } catch (e) {
-            Logger.error(`Failed to parse A2A JSON-RPC SSE event`, { error: e, data: dataStr });
+            const dataLength = dataStr.length;
+            const dataPreview = dataStr.length > 100 ? dataStr.substring(0, 100) + '...' : dataStr;
+            Logger.error(`Failed to parse A2A JSON-RPC SSE event`, { error: e, dataLength, dataPreview });
             throw new Error(
-                `Failed to parse A2A JSON-RPC SSE event: ${e instanceof Error ? e.message : String(e)} -- data: ${dataStr}`,
+                `Failed to parse A2A JSON-RPC SSE event: ${e instanceof Error ? e.message : String(e)} -- data length: ${dataLength}, preview: ${dataPreview}`,
             );
         }
     });

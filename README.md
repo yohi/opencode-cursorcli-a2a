@@ -36,6 +36,8 @@ npm run build
 
 ### 基本設定（最小構成）
 
+`npm` のパス（`ABSOLUTE_PATH_TO_YOUR_PROJECT`）は、お使いの環境のプロジェクトの絶対パスに置き換えてください。
+
 ```jsonc
 {
   "$schema": "https://opencode.ai/config.json",
@@ -46,7 +48,7 @@ npm run build
   // 2. プロバイダーの詳細設定（パスとモデルの定義）
   "provider": {
     "opencode-cursorcli-a2a": {
-      "npm": "file:///absolute/path/to/opencode-cursorcli-a2a/dist/index.cjs",
+      "npm": "file:///ABSOLUTE_PATH_TO_YOUR_PROJECT/dist/index.cjs",
       "models": {
         "claude-4.6-sonnet-medium": {}
       },
@@ -73,7 +75,7 @@ npm run build
   ],
   "provider": {
     "opencode-cursorcli-a2a": {
-      "npm": "file:///absolute/path/to/opencode-cursorcli-a2a/dist/index.cjs",
+      "npm": "file:///ABSOLUTE_PATH_TO_YOUR_PROJECT/dist/index.cjs",
       "models": {
         // cursorModel オプションを指定して明示的に指定可能
         "claude-4.6-sonnet-medium": {

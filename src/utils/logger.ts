@@ -57,22 +57,22 @@ export const logger = {
     debug: (msg: string, ...args: any[]) => {
         if (!shouldLog('debug')) return;
         const context = extractContext(...args);
-        console.debug(safeStringify({ level: 'debug', prefix: LOG_PREFIX, message: msg, timestamp: new Date().toISOString(), ...context }));
+        console.debug(safeStringify({ ...context, level: 'debug', prefix: LOG_PREFIX, message: msg, timestamp: new Date().toISOString() }));
     },
     info: (msg: string, ...args: any[]) => {
         if (!shouldLog('info')) return;
         const context = extractContext(...args);
-        console.info(safeStringify({ level: 'info', prefix: LOG_PREFIX, message: msg, timestamp: new Date().toISOString(), ...context }));
+        console.info(safeStringify({ ...context, level: 'info', prefix: LOG_PREFIX, message: msg, timestamp: new Date().toISOString() }));
     },
     warn: (msg: string, ...args: any[]) => {
         if (!shouldLog('warn')) return;
         const context = extractContext(...args);
-        console.warn(safeStringify({ level: 'warn', prefix: LOG_PREFIX, message: msg, timestamp: new Date().toISOString(), ...context }));
+        console.warn(safeStringify({ ...context, level: 'warn', prefix: LOG_PREFIX, message: msg, timestamp: new Date().toISOString() }));
     },
     error: (msg: string, ...args: any[]) => {
         if (!shouldLog('error')) return;
         const context = extractContext(...args);
-        console.error(safeStringify({ level: 'error', prefix: LOG_PREFIX, message: msg, timestamp: new Date().toISOString(), ...context }));
+        console.error(safeStringify({ ...context, level: 'error', prefix: LOG_PREFIX, message: msg, timestamp: new Date().toISOString() }));
     },
     child: (baseContext: Record<string, any>) => ({
         debug: (msg: string, ...args: any[]) => logger.debug(msg, { ...baseContext, ...extractContext(...args) }),

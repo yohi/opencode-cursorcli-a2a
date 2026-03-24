@@ -238,6 +238,7 @@ export class CursorA2AStreamMapper {
         this._promptTokens = 0;
         this._completionTokens = 0;
         this._textId = `text-${crypto.randomUUID().slice(0, 8)}`;
+        this._lastFinishReason = 'unknown';
     }
 
     /**
