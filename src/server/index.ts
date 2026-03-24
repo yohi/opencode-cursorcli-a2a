@@ -119,9 +119,8 @@ app.post('/:projectId/messages', authMiddleware, async (req: express.Request, re
         const controller = new AbortController();
         req.on('close', () => {
             if (!res.writableEnded) {
-                logger.warn('Request connection closed prematurely by client', { projectId, sessionId });
-                // TEST: Do not abort the controller. Let's see if we can still write to the stream!
-                // controller.abort();
+                logger.warn('Request connection closed prematurely by client, aborting agent', { projectId, sessionId });
+                controller.abort();
             }
         });
 
@@ -188,6 +187,10 @@ server.on('error', (err) => {
 
 process.on('uncaughtException', (err) => {
     logger.error('UNCAUGHT EXCEPTION:', err);
+    // Give some time for logs to be flushed before exiting
+    setTimeout(() => {
+        process.exit(1);
+    }, 100);
 });
 
 process.on('unhandledRejection', (reason) => {

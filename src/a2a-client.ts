@@ -181,130 +181,150 @@ export class A2AClient {
         };
         Logger.info(`POST ${url}`, JSON.stringify(redactedRequest));
 
+        const onAbortOuter = () => {
+            Logger.warn(`[A2AClient] Request aborted by client signal during execution! Reason: ${abortSignal?.reason}`);
+        };
         if (abortSignal) {
             if (abortSignal.aborted) {
                 Logger.warn(`[A2AClient] Signal already aborted before fetch! Reason: ${abortSignal.reason}`);
             }
-            abortSignal.addEventListener('abort', () => {
-                Logger.warn(`[A2AClient] Request aborted by client signal during execution! Reason: ${abortSignal.reason}`);
-            });
+            abortSignal.addEventListener('abort', onAbortOuter, { once: true });
         }
 
         let lastError: Error | undefined;
         let statusCode: number | undefined;
         let responseBody: string | undefined;
 
-        for (let attempt = 0; attempt <= retryCount; attempt++) {
-            try {
-                const response = await new Promise<ChatStreamResponse>((resolve, reject) => {
-                    const parsedUrl = new URL(url);
-                    const client = parsedUrl.protocol === 'https:' ? https : http;
-                    const requestBody = JSON.stringify(request);
-                    const reqOptions = {
-                        method: 'POST',
-                        headers: {
-                            ...headers,
-                            'Content-Length': Buffer.byteLength(requestBody)
-                        }
-                    };
-
-                    const req = client.request(parsedUrl, reqOptions, (res) => {
-                        const status = res.statusCode || 500;
-                        Logger.info(`Response ${status} ${res.statusMessage}`);
-
-                        if (status >= 400) {
-                            let body = '';
-                            res.on('data', chunk => { body += chunk; });
-                            res.on('end', () => {
-                                const err = new Error(`HTTP error ${status}: ${res.statusMessage}`);
-                                (err as any).status = status;
-                                (err as any).body = body;
-                                reject(err);
-                            });
-                            return;
-                        }
-
-                        const responseHeaders: Record<string, string> = {};
-                        for (const [key, value] of Object.entries(res.headers)) {
-                            if (Array.isArray(value)) {
-                                responseHeaders[key] = value.join(', ');
-                            } else if (value) {
-                                responseHeaders[key] = value;
+        try {
+            for (let attempt = 0; attempt <= retryCount; attempt++) {
+                try {
+                    const response = await new Promise<ChatStreamResponse>((resolve, reject) => {
+                        const parsedUrl = new URL(url);
+                        const client = parsedUrl.protocol === 'https:' ? https : http;
+                        const requestBody = JSON.stringify(request);
+                        const reqOptions = {
+                            method: 'POST',
+                            headers: {
+                                ...headers,
+                                'Content-Length': Buffer.byteLength(requestBody)
                             }
-                        }
+                        };
 
-                        const stream = new ReadableStream<Uint8Array>({
-                            start(controller) {
-                                res.on('data', chunk => controller.enqueue(chunk));
-                                res.on('end', () => controller.close());
-                                res.on('error', err => controller.error(err));
-                                if (abortSignal) {
-                                    abortSignal.addEventListener('abort', () => {
-                                        res.destroy();
-                                    });
+                        const req = client.request(parsedUrl, reqOptions, (res) => {
+                            const status = res.statusCode || 500;
+                            Logger.info(`Response ${status} ${res.statusMessage}`);
+
+                            if (status >= 400) {
+                                let body = '';
+                                res.on('data', chunk => { body += chunk; });
+                                res.on('end', () => {
+                                    const err = new Error(`HTTP error ${status}: ${res.statusMessage}`);
+                                    (err as any).status = status;
+                                    (err as any).body = body;
+                                    reject(err);
+                                });
+                                return;
+                            }
+
+                            const responseHeaders: Record<string, string> = {};
+                            for (const [key, value] of Object.entries(res.headers)) {
+                                if (Array.isArray(value)) {
+                                    responseHeaders[key] = value.join(', ');
+                                } else if (value) {
+                                    responseHeaders[key] = value;
                                 }
-                            },
-                            cancel() {
-                                res.destroy();
                             }
+
+                            const stream = new ReadableStream<Uint8Array>({
+                                start(controller) {
+                                    const onAbortReq = () => {
+                                        res.destroy();
+                                    };
+                                    res.on('data', chunk => controller.enqueue(chunk));
+                                    res.on('end', () => {
+                                        abortSignal?.removeEventListener('abort', onAbortReq);
+                                        controller.close();
+                                    });
+                                    res.on('error', err => {
+                                        abortSignal?.removeEventListener('abort', onAbortReq);
+                                        controller.error(err);
+                                    });
+                                    if (abortSignal) {
+                                        abortSignal.addEventListener('abort', onAbortReq, { once: true });
+                                    }
+                                },
+                                cancel() {
+                                    res.destroy();
+                                }
+                            });
+
+                            resolve({
+                                stream,
+                                status,
+                                headers: responseHeaders
+                            });
                         });
 
-                        resolve({
-                            stream,
-                            status,
-                            headers: responseHeaders
+                        const onAbortReq = () => {
+                            req.destroy(new Error('AbortError'));
+                        };
+
+                        req.on('error', err => {
+                            abortSignal?.removeEventListener('abort', onAbortReq);
+                            reject(err);
                         });
+
+                        if (abortSignal) {
+                            abortSignal.addEventListener('abort', onAbortReq, { once: true });
+                        }
+
+                        req.write(requestBody);
+                        req.end();
                     });
 
-                    req.on('error', err => reject(err));
+                    return response;
+                } catch (error) {
+                    if (error instanceof APICallError) throw error;
+                    lastError = error as Error;
+                    
+                    statusCode = (error as any).status;
+                    responseBody = (error as any).body;
+                    const errorCode = (error as any).cause?.code || (error as any).code || (error instanceof Error && error.message === 'AbortError' ? 'AbortError' : undefined);
+                    
+                    const isTransient = 
+                        (statusCode !== undefined && RETRY_STATUS_CODES.includes(statusCode)) ||
+                        (errorCode !== undefined && ['ETIMEDOUT', 'EAI_AGAIN', 'ECONNRESET', 'ECONNREFUSED'].includes(errorCode));
 
-                    if (abortSignal) {
-                        abortSignal.addEventListener('abort', () => {
-                            req.destroy(new Error('AbortError'));
-                        });
+                    if (isTransient && attempt < retryCount) {
+                        Logger.warn(`Retrying request due to network error/status ${statusCode || errorCode} (attempt ${attempt + 1}/${retryCount})`);
+                        await new Promise(r => setTimeout(r, 1000));
+                        continue;
                     }
 
-                    req.write(requestBody);
-                    req.end();
-                });
+                    const errMsg = error instanceof Error ? error.message : String(error);
+                    if (errMsg.includes('ECONNREFUSED')) {
+                        Logger.warn(
+                            `cursor-agent-a2a server connection refused at ${url}. ` +
+                            `Is the server running? Try: cursor-agent-a2a start --port ${this.config.port}`
+                        );
+                    }
 
-                return response;
-            } catch (error) {
-                if (error instanceof APICallError) throw error;
-                lastError = error as Error;
-                
-                statusCode = (error as any).status;
-                responseBody = (error as any).body;
-                const errorCode = (error as any).cause?.code || (error as any).code || (error instanceof Error && error.message === 'AbortError' ? 'AbortError' : undefined);
-                
-                const isTransient = errorCode ? ['ETIMEDOUT', 'EAI_AGAIN', 'ECONNRESET', 'ECONNREFUSED'].includes(errorCode) || (statusCode && RETRY_STATUS_CODES.includes(statusCode)) : false;
-
-                if (isTransient && attempt < retryCount) {
-                    Logger.warn(`Retrying request due to network error/status ${statusCode || errorCode} (attempt ${attempt + 1}/${retryCount})`);
-                    await new Promise(r => setTimeout(r, 1000));
-                    continue;
+                    throw new APICallError({
+                        message: errMsg,
+                        url,
+                        requestBodyValues: request,
+                        statusCode,
+                        responseBody,
+                        cause: error,
+                        isRetryable: isTransient,
+                    });
                 }
-
-                const errMsg = error instanceof Error ? error.message : String(error);
-                if (errMsg.includes('ECONNREFUSED')) {
-                    Logger.warn(
-                        `cursor-agent-a2a server connection refused at ${url}. ` +
-                        `Is the server running? Try: cursor-agent-a2a start --port ${this.config.port}`
-                    );
-                }
-
-                throw new APICallError({
-                    message: errMsg,
-                    url,
-                    requestBodyValues: request,
-                    statusCode,
-                    responseBody,
-                    cause: error,
-                    isRetryable: isTransient,
-                });
+            }
+            throw lastError || new Error('Unknown error during fetch');
+        } finally {
+            if (abortSignal) {
+                abortSignal.removeEventListener('abort', onAbortOuter);
             }
         }
-        
-        throw lastError;
     }
 }

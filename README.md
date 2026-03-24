@@ -46,7 +46,7 @@ npm run build
   // 2. プロバイダーの詳細設定（パスとモデルの定義）
   "provider": {
     "opencode-cursorcli-a2a": {
-      "npm": "file:///home/y_ohi/program/private/opencode-cursorcli-a2a/dist/index.cjs",
+      "npm": "file:///absolute/path/to/opencode-cursorcli-a2a/dist/index.cjs",
       "models": {
         "claude-4.6-sonnet-medium": {}
       },
@@ -73,7 +73,7 @@ npm run build
   ],
   "provider": {
     "opencode-cursorcli-a2a": {
-      "npm": "file:///home/y_ohi/program/private/opencode-cursorcli-a2a/dist/index.cjs",
+      "npm": "file:///absolute/path/to/opencode-cursorcli-a2a/dist/index.cjs",
       "models": {
         // cursorModel オプションを指定して明示的に指定可能
         "claude-4.6-sonnet-medium": {
