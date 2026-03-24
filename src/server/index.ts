@@ -144,7 +144,7 @@ app.post('/:projectId/messages', authMiddleware, async (req: express.Request, re
                 } else if (event instanceof Error) {
                     normalizedEvent = {
                         type: 'error',
-                        error: event.message
+                        message: event.message
                     };
                 }
 
@@ -160,7 +160,7 @@ app.post('/:projectId/messages', authMiddleware, async (req: express.Request, re
                 return;
             }
             const errorMessage = error instanceof Error ? error.message : String(error);
-            res.write(`data: ${JSON.stringify({ type: 'error', error: errorMessage })}\n\n`);
+            res.write(`data: ${JSON.stringify({ type: 'error', message: errorMessage })}\n\n`);
             res.end();
             return;
         }
