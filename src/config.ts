@@ -2,7 +2,7 @@
 import { z } from 'zod';
 import { ConfigSchema, type A2AConfig, type AgentEndpoint, AgentEndpointSchema } from './schemas.js';
 import type { SessionStore } from './session.js';
-import type { FallbackConfig } from './fallback.js';
+
 import { readFileSync, watch, existsSync } from 'node:fs';
 import path from 'node:path';
 import { logger as Logger } from './utils/logger.js';
@@ -38,6 +38,18 @@ export interface AgentTriggerConfig {
     keywords?: string[];
     /** このエージェントに送る際のカスタムシステムプロンプト追加文 */
     systemPromptAddendum?: string;
+}
+
+// ---------------------------------------------------------------------------
+// エラー時フォールバック設定
+// ---------------------------------------------------------------------------
+export interface FallbackConfig {
+    /** サーバーエラー時にローカル LLM または別のプロバイダーにフォールバックするか */
+    enabled?: boolean;
+    /** フォールバック先として検討するモデル ID リスト */
+    models?: string[];
+    /** 最大試行回数 */
+    maxRetries?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -199,15 +211,13 @@ export class ConfigManager {
                 if (event === 'change' || event === 'rename') {
                     if (this._changeTimer) clearTimeout(this._changeTimer);
                     
-                    const fileExists = existsSync(this.configPath);
-                    
                     this._changeTimer = setTimeout(() => {
                         Logger.info(`[ConfigManager] Config file ${event}, reloading...`);
                         
                         let loadSuccess = false;
                         try {
-                            // If it's a rename and the file doesn't exist, we skip load to avoid errors
-                            if (event !== 'rename' || fileExists || existsSync(this.configPath)) {
+                            // Check if file exists now (fresh check after debounce)
+                            if (existsSync(this.configPath)) {
                                 this.load();
                                 loadSuccess = true;
                             }
@@ -216,14 +226,15 @@ export class ConfigManager {
                         }
 
                         if (event === 'rename') {
-                            this.load();
                             if (existsSync(this.configPath)) {
+                                // Atomic move or re-creation occurred. 
+                                // Reset the watcher to handle the new inode.
                                 this.stopWatch();
                                 if (this._reWatchTimer) clearTimeout(this._reWatchTimer);
                                 this._reWatchTimer = setTimeout(() => {
                                     this._reWatchTimer = null;
                                     this.watch(true);
-                                }, 50);
+                                }, 100);
                             } else {
                                 this.stopWatch();
                             }

@@ -7,7 +7,7 @@
 
 import { spawn, exec, execSync, type ChildProcess } from 'node:child_process';
 import { createConnection } from 'node:net';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
