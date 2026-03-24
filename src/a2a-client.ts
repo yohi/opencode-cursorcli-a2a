@@ -139,48 +139,6 @@ export class A2AClient {
 
     /** `/:projectId/messages?stream=true` エンドポイントにストリーミングリクエストを送信する */
     async chatStream({ request, idempotencyKey, abortSignal, traceId, workspace }: ChatStreamOptions): Promise<ChatStreamResponse> {
-        const finalTraceId = traceId || crypto.randomUUID();
-        const token = this.getToken();
-        const isSecure = this.isSecureEndpoint();
-
-        if (token && !isSecure) {
-            throw new APICallError({
-                message: 'A2AClient: Token cannot be sent over an insecure non-localhost connection.',
-                url: `${this.baseUrl}/:projectId/messages?stream=true`,
-                requestBodyValues: request,
-                isRetryable: false,
-            });
-        }
-
-        const effectiveWorkspace = request.context?.workspace || workspace || process.cwd();
-        const projectId = await this.resolveProjectId(effectiveWorkspace);
-        const url = `${this.baseUrl}/${projectId}/messages?stream=true`;
-
-        const headers: Record<string, string> = {
-            'Content-Type': 'application/json',
-            'Accept': 'text/event-stream',
-            'x-a2a-trace-id': finalTraceId,
-        };
-
-        if (idempotencyKey) {
-            headers['Idempotency-Key'] = idempotencyKey;
-        }
-
-        if (token && isSecure) {
-            headers['Authorization'] = `Bearer ${token}`;
-        }
-
-        const retryCount = idempotencyKey ? 3 : 0;
-
-        const redactedRequest = {
-            model: request.model ?? '(default)',
-            traceId: finalTraceId,
-            workspace: effectiveWorkspace,
-            messageLength: request.message.length,
-            selectedCodeLength: request.context?.selectedCode?.length ?? 0
-        };
-        Logger.info(`POST ${url}`, JSON.stringify(redactedRequest));
-
         const onAbortOuter = () => {
             Logger.warn(`[A2AClient] Request aborted by client signal during execution! Reason: ${abortSignal?.reason}`);
         };
@@ -192,11 +150,24 @@ export class A2AClient {
             abortSignal.addEventListener('abort', onAbortOuter, { once: true });
         }
 
-        let lastError: Error | undefined;
-        let statusCode: number | undefined;
-        let responseBody: string | undefined;
+        const finalTraceId = traceId || crypto.randomUUID();
+        const token = this.getToken();
+        const isSecure = this.isSecureEndpoint();
+
+        if (token && !isSecure) {
+            if (abortSignal) abortSignal.removeEventListener('abort', onAbortOuter);
+            throw new APICallError({
+                message: 'A2AClient: Token cannot be sent over an insecure non-localhost connection.',
+                url: `${this.baseUrl}/:projectId/messages?stream=true`,
+                requestBodyValues: request,
+                isRetryable: false,
+            });
+        }
 
         try {
+            const effectiveWorkspace = request.context?.workspace || workspace || process.cwd();
+            const projectId = await this.resolveProjectId(effectiveWorkspace);
+            const url = `${this.baseUrl}/${projectId}/messages?stream=true`;
             for (let attempt = 0; attempt <= retryCount; attempt++) {
                 try {
                     const response = await new Promise<ChatStreamResponse>((resolve, reject) => {

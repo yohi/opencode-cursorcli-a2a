@@ -206,5 +206,5 @@ process.on('uncaughtException', (err) => {
 });
 
 process.on('unhandledRejection', (reason) => {
-    logger.error('UNHANDLED REJECTION:', reason);
+    gracefulShutdown('UNHANDLED REJECTION:', reason);
 });

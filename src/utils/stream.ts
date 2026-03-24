@@ -11,14 +11,31 @@ import { Logger } from './logger.js';
 async function* parseSSEStream<T>(
     stream: ReadableStream<Uint8Array>,
     mapper: (dataStr: string) => T | undefined,
+    abortSignal?: AbortSignal,
 ): AsyncGenerator<T> {
     const decoder = new TextDecoder();
     const reader = stream.getReader();
     let buffer = '';
 
+    const onAbort = () => {
+        reader.cancel().catch(() => {});
+    };
+
+    if (abortSignal) {
+        if (abortSignal.aborted) {
+            reader.releaseLock();
+            throw abortSignal.reason || new Error('AbortError');
+        }
+        abortSignal.addEventListener('abort', onAbort, { once: true });
+    }
+
     try {
         Logger.info('[Stream] Starting to read from reader');
         while (true) {
+            if (abortSignal?.aborted) {
+                break;
+            }
+
             const { done, value } = await reader.read();
             if (done) {
                 Logger.info('[Stream] Reader done');
@@ -62,6 +79,9 @@ async function* parseSSEStream<T>(
         throw e;
     } finally {
         Logger.info('[Stream] Releasing reader lock');
+        if (abortSignal) {
+            abortSignal.removeEventListener('abort', onAbort);
+        }
         reader.releaseLock();
     }
 }
@@ -76,6 +96,7 @@ async function* parseSSEStream<T>(
  */
 export function parseCursorA2AStream(
     stream: ReadableStream<Uint8Array>,
+    abortSignal?: AbortSignal,
 ): AsyncGenerator<CursorAgentStreamEvent> {
     return parseSSEStream(stream, (dataStr) => {
         try {
@@ -89,25 +110,27 @@ export function parseCursorA2AStream(
                 `Failed to parse cursor-agent-a2a SSE event: ${e instanceof Error ? e.message : String(e)} -- data length: ${dataLength}, preview: ${dataPreview}`,
             );
         }
-        });
-        }
+    }, abortSignal);
+}
 
         /**
          * 旧 A2A JSON-RPC ストリームパーサー。
          */
         export function parseA2AStream(
             stream: ReadableStream<Uint8Array>,
+            abortSignal?: AbortSignal,
         ): AsyncIterable<A2AJsonRpcResponse> {
-            return parseSSEStream(stream, (dataStr) => {        try {
-            const parsed = JSON.parse(dataStr);
-            return RpcResponseSchema.parse(parsed);
-        } catch (e) {
-            const dataLength = dataStr.length;
-            const dataPreview = dataStr.length > 100 ? dataStr.substring(0, 100) + '...' : dataStr;
-            Logger.error(`Failed to parse A2A JSON-RPC SSE event`, { error: e, dataLength, dataPreview });
-            throw new Error(
-                `Failed to parse A2A JSON-RPC SSE event: ${e instanceof Error ? e.message : String(e)} -- data length: ${dataLength}, preview: ${dataPreview}`,
-            );
+            return parseSSEStream(stream, (dataStr) => {
+                try {
+                    const parsed = JSON.parse(dataStr);
+                    return RpcResponseSchema.parse(parsed);
+                } catch (e) {
+                    const dataLength = dataStr.length;
+                    const dataPreview = dataStr.length > 100 ? dataStr.substring(0, 100) + '...' : dataStr;
+                    Logger.error(`Failed to parse A2A JSON-RPC SSE event`, { error: e, dataLength, dataPreview });
+                    throw new Error(
+                        `Failed to parse A2A JSON-RPC SSE event: ${e instanceof Error ? e.message : String(e)} -- data length: ${dataLength}, preview: ${dataPreview}`,
+                    );
+                }
+            }, abortSignal);
         }
-    });
-}
