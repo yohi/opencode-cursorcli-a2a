@@ -80,6 +80,9 @@ app.get('/projects', authMiddleware, (_req: express.Request, res: express.Respon
 });
 
 app.post('/projects', authMiddleware, (req: express.Request, res: express.Response) => {
+    if (!req.body || typeof req.body !== 'object') {
+        return res.status(400).json({ error: 'Invalid request body' });
+    }
     const { name, workspace } = req.body;
     if (typeof workspace !== 'string' || workspace.trim().length === 0) {
         return res.status(400).json({ error: 'Missing or invalid workspace' });
@@ -128,9 +131,24 @@ app.post('/:projectId/messages', authMiddleware, async (req: express.Request, re
         });
 
         try {
-            await executeCursorAgentStream(message, { workspace, sessionId, model, signal: controller.signal }, (event) => {
+            await executeCursorAgentStream(message, { workspace, sessionId, model, signal: controller.signal }, (event: any) => {
                 if (event.sessionId) capturedSessionId = event.sessionId;
-                const chunk = `data: ${JSON.stringify(event)}\n\n`;
+
+                // イベントの正規化 (CursorAgentStreamEventSchema に適合させる)
+                let normalizedEvent = event;
+                if (event.type === 'tool_use' || event.type === 'info' || event.type === 'warning') {
+                    normalizedEvent = {
+                        type: event.type,
+                        message: event.content || event.message || String(event)
+                    };
+                } else if (event instanceof Error) {
+                    normalizedEvent = {
+                        type: 'error',
+                        error: event.message
+                    };
+                }
+
+                const chunk = `data: ${JSON.stringify(normalizedEvent)}\n\n`;
                 res.write(chunk);
             });
             res.write(`data: ${JSON.stringify({ type: 'done', sessionId: capturedSessionId })}\n\n`);

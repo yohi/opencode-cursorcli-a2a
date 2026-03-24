@@ -206,6 +206,11 @@ export class A2AClient {
             Logger.info(`POST ${url}`, JSON.stringify(redactedRequest));
 
             for (let attempt = 0; attempt <= retryCount; attempt++) {
+                // リトライ開始前にアボートされていないかチェック
+                if (abortSignal?.aborted) {
+                    throw abortSignal.reason || new Error('AbortError');
+                }
+
                 try {
                     const response = await new Promise<ChatStreamResponse>((resolve, reject) => {
                         const parsedUrl = new URL(url);
@@ -217,7 +222,8 @@ export class A2AClient {
                                 ...headers,
                                 'Content-Length': Buffer.byteLength(requestBody)
                             },
-                            timeout: 30000 // 30s timeout
+                            // SSEのためにソケットタイムアウトを無効化（または大幅に延長）
+                            timeout: 0 
                         };
 
                         const req = client.request(parsedUrl, reqOptions, (res) => {
@@ -279,11 +285,7 @@ export class A2AClient {
                             req.destroy(new Error('AbortError'));
                         };
 
-                        req.on('timeout', () => {
-                            req.destroy(new Error('TimeoutError'));
-                            reject(new Error('TimeoutError'));
-                        });
-
+                        // 接続確立までのタイムアウトを管理（必要に応じて実装）
                         req.on('error', err => {
                             abortSignal?.removeEventListener('abort', onAbortReq);
                             reject(err);
@@ -312,7 +314,23 @@ export class A2AClient {
 
                     if (isTransient && attempt < retryCount) {
                         Logger.warn(`Retrying request due to network error/status ${statusCode || errorCode} (attempt ${attempt + 1}/${retryCount})`);
-                        await new Promise(r => setTimeout(r, 1000));
+                        
+                        // アボート可能なバックオフ待機
+                        await new Promise<void>((resolveWait, rejectWait) => {
+                            const timer = setTimeout(resolveWait, 1000);
+                            if (abortSignal) {
+                                const onAbortWait = () => {
+                                    clearTimeout(timer);
+                                    rejectWait(abortSignal.reason || new Error('AbortError'));
+                                };
+                                abortSignal.addEventListener('abort', onAbortWait, { once: true });
+                                // 待機終了後にリスナーを解除するためにラップ
+                                resolveWait = ((originalResolve) => () => {
+                                    abortSignal.removeEventListener('abort', onAbortWait);
+                                    originalResolve();
+                                })(resolveWait);
+                            }
+                        });
                         continue;
                     }
 
