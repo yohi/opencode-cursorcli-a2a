@@ -5,14 +5,15 @@
  * Prioritizes the internal server over external libraries.
  */
 
-import { spawn, type ChildProcess } from 'node:child_process';
+import { spawn, exec, type ChildProcess } from 'node:child_process';
 import { createConnection } from 'node:net';
 import { existsSync, readFileSync } from 'node:fs';
-import { execSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
 import { logger } from './utils/logger.js';
-import { ConfigManager } from './config.js';
+
+const execAsync = promisify(exec);
 
 export interface AutoStartConfig {
     /** cursor-agent の実行ファイルへのパス。未指定時は自動検出。 */
@@ -41,29 +42,6 @@ function getCurrentDir(): string {
 }
 
 export async function probePort(port: number, host: string): Promise<boolean> {
-    // テスト環境では TCP 接続をスキップして HTTP check のみを行う
-    // (createConnection をモックするのが難しいため)
-    if (process.env.NODE_ENV === 'test') {
-        return new Promise((resolve) => {
-            const normalizedHost = (host.includes(':') && !host.startsWith('[') && !host.endsWith(']'))
-                ? `[${host}]`
-                : host;
-            const url = `http://${normalizedHost}:${port}/health`;
-            const timeoutMs = 500;
-            const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-
-            fetch(url, { signal: controller.signal })
-                .then(async (res) => {
-                    if (!res.ok) { resolve(false); return; }
-                    const data = await res.json() as { service?: string };
-                    resolve(!!(data && data.service === 'opencode-cursor-a2a-internal'));
-                })
-                .catch(() => resolve(false))
-                .finally(() => clearTimeout(timeoutId));
-        });
-    }
-
     // 1. まずは TCP 接続を確認 (高速)
     const tcpReady = await new Promise<boolean>((resolve) => {
         const sock = createConnection({ port, host });
@@ -99,8 +77,6 @@ export async function probePort(port: number, host: string): Promise<boolean> {
             .catch(() => {
                 // HTTP エラー (404等) や タイムアウトの場合は、
                 // 他の(自律サーバーではない)プロセスが動いているとみなす。
-                // ただし、以前のロジック(master以前)では TCP さえ通れば true としていた場合もあるため、
-                // ここでは「自律サーバーか」を厳密にチェック。
                 resolve(false);
             })
             .finally(() => clearTimeout(timeoutId));
@@ -110,7 +86,7 @@ export async function probePort(port: number, host: string): Promise<boolean> {
 /**
  * Resolves the path to the internal or external server entry point.
  */
-export function resolveServerPath(overridePath?: string): string {
+export async function resolveServerPath(overridePath?: string): Promise<string> {
     if (overridePath) {
         if (!existsSync(overridePath)) {
             throw new Error(`[ServerManager] Specified serverPath does not exist: ${overridePath}`);
@@ -145,7 +121,8 @@ export function resolveServerPath(overridePath?: string): string {
 
     // 3. npm root -g 経由でグローバルインストール検索
     try {
-        const npmRoot = execSync('npm root -g', { encoding: 'utf8', timeout: 5000 }).trim();
+        const { stdout } = await execAsync('npm root -g', { timeout: 2000 });
+        const npmRoot = stdout.trim();
         const globalServer = path.join(npmRoot, 'cursor-agent-a2a', 'dist', 'index.js');
         if (existsSync(globalServer)) return globalServer;
     } catch {
@@ -154,7 +131,8 @@ export function resolveServerPath(overridePath?: string): string {
 
     // 4. pnpm グローバルインストール検索
     try {
-        const pnpmRoot = execSync('pnpm root -g 2>/dev/null', { encoding: 'utf8', timeout: 5000 }).trim();
+        const { stdout } = await execAsync('pnpm root -g 2>/dev/null', { timeout: 2000 });
+        const pnpmRoot = stdout.trim();
         const pnpmServer = path.join(pnpmRoot, 'cursor-agent-a2a', 'dist', 'index.js');
         if (existsSync(pnpmServer)) return pnpmServer;
     } catch {
@@ -163,10 +141,10 @@ export function resolveServerPath(overridePath?: string): string {
 
     // 5. cursor-agent-a2a コマンドを which で検索
     try {
-        const result = execSync('which cursor-agent-a2a 2>/dev/null', {
-            encoding: 'utf8',
-            timeout: 5000,
-        }).trim();
+        const { stdout } = await execAsync('which cursor-agent-a2a 2>/dev/null', {
+            timeout: 2000,
+        });
+        const result = stdout.trim();
         if (result && existsSync(result)) return result;
     } catch {
         // スキップ
@@ -240,7 +218,7 @@ export class ServerManager {
                 return;
             }
 
-            const serverPath = resolveServerPath(config.serverPath);
+            const serverPath = await resolveServerPath(config.serverPath);
             const env: Record<string, string> = {
                 ...(process.env as Record<string, string>),
                 PORT: String(port),
@@ -395,7 +373,6 @@ export class ServerManager {
             process.removeListener(event, handler as (...args: unknown[]) => void);
         }
         this.cleanupHandlers = [];
-        try { ConfigManager.getInstance().dispose(); } catch { /**/ }
     }
 
     static _reset() {

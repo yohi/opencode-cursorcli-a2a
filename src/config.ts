@@ -184,7 +184,11 @@ export class ConfigManager {
     }
 
     public watch(enable: boolean): void {
-        if (!enable || this.isWatching || !existsSync(this.configPath)) return;
+        if (!enable) {
+            this.stopWatch();
+            return;
+        }
+        if (this.isWatching || !existsSync(this.configPath)) return;
         this.isWatching = true;
         try {
             this.configWatcher = watch(this.configPath, (event) => {

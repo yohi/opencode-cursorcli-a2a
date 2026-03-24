@@ -1,5 +1,5 @@
 // src/session.ts
-import { Logger } from './utils/logger.js';
+import { logger as Logger } from './utils/logger.js';
 
 export interface A2ASession {
     contextId?: string;
