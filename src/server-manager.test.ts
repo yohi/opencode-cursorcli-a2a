@@ -2,13 +2,19 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { ServerManager } from './server-manager';
 import { spawn } from 'node:child_process';
 import * as fs from 'node:fs';
+import { createConnection } from 'node:net';
 
 vi.mock('node:child_process', () => ({
     spawn: vi.fn(),
+    exec: vi.fn(),
 }));
 
 vi.mock('node:fs', () => ({
     existsSync: vi.fn(),
+}));
+
+vi.mock('node:net', () => ({
+    createConnection: vi.fn(),
 }));
 
 describe('ServerManager', () => {
@@ -21,6 +27,18 @@ describe('ServerManager', () => {
         vi.clearAllMocks();
         originalFetch = global.fetch;
         (fs.existsSync as any).mockReturnValue(true);
+
+        // Default mock for createConnection (simulating success)
+        (createConnection as any).mockReturnValue({
+            once: vi.fn().mockImplementation((event, handler) => {
+                if (event === 'connect') {
+                    // Simulate async success
+                    setTimeout(handler, 0);
+                }
+            }),
+            destroy: vi.fn(),
+            setTimeout: vi.fn(),
+        });
     });
 
     afterEach(() => {
@@ -31,7 +49,7 @@ describe('ServerManager', () => {
         const port = 4937;
         const host = '127.0.0.1';
         const modelId = 'auto';
-        const config = { pollIntervalMs: 10, startupTimeoutMs: 1000 };
+        const config = { pollIntervalMs: 10, startupTimeoutMs: 2000 };
 
         // Mock fetch to simulate server health check
         let fetchCount = 0;
@@ -83,7 +101,24 @@ describe('ServerManager', () => {
         const port = 4938;
         const host = '127.0.0.1';
         const modelId = 'auto';
-        const config = { pollIntervalMs: 10, startupTimeoutMs: 1000 };
+        const config = { pollIntervalMs: 10, startupTimeoutMs: 2000 };
+
+        // 1回目は TCP 接続失敗 (サーバー未起動)
+        (createConnection as any).mockReturnValueOnce({
+            once: vi.fn().mockImplementation((event, handler) => {
+                if (event === 'error') setTimeout(handler, 0);
+            }),
+            destroy: vi.fn(),
+            setTimeout: vi.fn(),
+        });
+        // 2回目以降 (waitForPort等) は成功
+        (createConnection as any).mockReturnValue({
+            once: vi.fn().mockImplementation((event, handler) => {
+                if (event === 'connect') setTimeout(handler, 0);
+            }),
+            destroy: vi.fn(),
+            setTimeout: vi.fn(),
+        });
 
         global.fetch = vi.fn()
             .mockResolvedValueOnce({ ok: false })
@@ -118,7 +153,23 @@ describe('ServerManager', () => {
         const port = 4939;
         const host = '127.0.0.1';
         const modelId = 'auto';
-        const config = { pollIntervalMs: 10, startupTimeoutMs: 1000 };
+        const config = { pollIntervalMs: 10, startupTimeoutMs: 2000 };
+
+        // TCP 接続モックの制御
+        (createConnection as any).mockReturnValueOnce({
+            once: vi.fn().mockImplementation((event, handler) => {
+                if (event === 'error') setTimeout(handler, 0);
+            }),
+            destroy: vi.fn(),
+            setTimeout: vi.fn(),
+        });
+        (createConnection as any).mockReturnValue({
+            once: vi.fn().mockImplementation((event, handler) => {
+                if (event === 'connect') setTimeout(handler, 0);
+            }),
+            destroy: vi.fn(),
+            setTimeout: vi.fn(),
+        });
 
         const exitHandlers: Set<(code: number | null, signal: string | null) => void> = new Set();
         const mockProc = {
