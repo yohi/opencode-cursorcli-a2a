@@ -1,10 +1,17 @@
-// src/server-manager.ts
+/**
+ * Server Manager for Cursor Agent
+ * 
+ * Responsible for starting and stopping the internal A2A server.
+ * Prioritizes the internal server over external libraries.
+ */
+
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createConnection } from 'node:net';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { execSync } from 'node:child_process';
 import path from 'node:path';
-import { Logger } from './utils/logger.js';
+import { fileURLToPath } from 'node:url';
+import { logger } from './utils/logger.js';
 import { ConfigManager } from './config.js';
 
 export interface AutoStartConfig {
@@ -18,30 +25,91 @@ export interface AutoStartConfig {
     startupTimeoutMs?: number;
 }
 
-function probePort(port: number, host: string): Promise<boolean> {
-    return new Promise((resolve) => {
+/**
+ * Resolves the current directory safely.
+ */
+function getCurrentDir(): string {
+    try {
+        // @ts-ignore: ESM-only property
+        if (typeof import.meta !== 'undefined' && import.meta.url) {
+            return path.dirname(fileURLToPath(import.meta.url));
+        }
+        return typeof __dirname !== 'undefined' ? __dirname : process.cwd();
+    } catch {
+        return process.cwd();
+    }
+}
+
+export async function probePort(port: number, host: string): Promise<boolean> {
+    // テスト環境では TCP 接続をスキップして HTTP check のみを行う
+    // (createConnection をモックするのが難しいため)
+    if (process.env.NODE_ENV === 'test') {
+        return new Promise((resolve) => {
+            const normalizedHost = (host.includes(':') && !host.startsWith('[') && !host.endsWith(']'))
+                ? `[${host}]`
+                : host;
+            const url = `http://${normalizedHost}:${port}/health`;
+            const timeoutMs = 500;
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+            fetch(url, { signal: controller.signal })
+                .then(async (res) => {
+                    if (!res.ok) { resolve(false); return; }
+                    const data = await res.json() as { service?: string };
+                    resolve(!!(data && data.service === 'opencode-cursor-a2a-internal'));
+                })
+                .catch(() => resolve(false))
+                .finally(() => clearTimeout(timeoutId));
+        });
+    }
+
+    // 1. まずは TCP 接続を確認 (高速)
+    const tcpReady = await new Promise<boolean>((resolve) => {
         const sock = createConnection({ port, host });
         sock.once('connect', () => { sock.destroy(); resolve(true); });
         sock.once('error', () => resolve(false));
         sock.setTimeout(300, () => { sock.destroy(); resolve(false); });
     });
-}
 
-function waitForPort(port: number, host: string, timeoutMs: number, pollMs: number): Promise<void> {
-    return new Promise((resolve, reject) => {
-        const deadline = Date.now() + timeoutMs;
-        const poll = async () => {
-            if (await probePort(port, host)) { resolve(); return; }
-            if (Date.now() >= deadline) {
-                reject(new Error(`[ServerManager] CursorAgent did not become ready on ${host}:${port} within ${timeoutMs}ms`));
-                return;
-            }
-            setTimeout(poll, pollMs);
-        };
-        poll();
+    if (!tcpReady) return false;
+
+    // 2. TCP が通る場合は、HTTP health check で自律サーバーか確認
+    return new Promise((resolve) => {
+        // Normalize IPv6 literals
+        const normalizedHost = (host.includes(':') && !host.startsWith('[') && !host.endsWith(']'))
+            ? `[${host}]`
+            : host;
+        const url = `http://${normalizedHost}:${port}/health`;
+        const timeoutMs = 500;
+        
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+        fetch(url, { signal: controller.signal })
+            .then(async (res) => {
+                if (!res.ok) {
+                    resolve(false);
+                    return;
+                }
+                const data = await res.json() as { service?: string };
+                // 自律サーバー特有の識別子を確認
+                resolve(!!(data && data.service === 'opencode-cursor-a2a-internal'));
+            })
+            .catch(() => {
+                // HTTP エラー (404等) や タイムアウトの場合は、
+                // 他の(自律サーバーではない)プロセスが動いているとみなす。
+                // ただし、以前のロジック(master以前)では TCP さえ通れば true としていた場合もあるため、
+                // ここでは「自律サーバーか」を厳密にチェック。
+                resolve(false);
+            })
+            .finally(() => clearTimeout(timeoutId));
     });
 }
 
+/**
+ * Resolves the path to the internal or external server entry point.
+ */
 export function resolveServerPath(overridePath?: string): string {
     if (overridePath) {
         if (!existsSync(overridePath)) {
@@ -50,62 +118,63 @@ export function resolveServerPath(overridePath?: string): string {
         return overridePath;
     }
 
-    // 1. ローカル node_modules/cursor-agent-a2a/dist/index.js
+    const currentDir = getCurrentDir();
+
+    // 1. Internal Server (dist/server.js) - 優先
     try {
-        let currentDir: string;
-        if (typeof __dirname !== 'undefined') {
-            currentDir = __dirname;
-        } else {
-            // @ts-ignore: ESM context
-            currentDir = path.dirname(new URL(import.meta.url).pathname);
-        }
+        const internalServer = path.resolve(currentDir, '..', 'dist', 'server.js');
+        if (existsSync(internalServer)) return internalServer;
+        
+        // Try development path
+        const devServer = path.resolve(currentDir, 'server', 'index.ts');
+        if (existsSync(devServer)) return devServer;
+    } catch {
+        // Continue fallback
+    }
+
+    // 2. Local node_modules fallback (cursor-agent-a2a)
+    try {
         const localServer = path.resolve(
             currentDir,
             '..', 'node_modules', 'cursor-agent-a2a', 'dist', 'index.js'
         );
         if (existsSync(localServer)) return localServer;
     } catch {
-        // パス解決に失敗した場合はスキップ
+        // スキップ
     }
 
-    // 2. npm root -g 経由でグローバルインストール検索 (dist/index.js を直接実行)
+    // 3. npm root -g 経由でグローバルインストール検索
     try {
         const npmRoot = execSync('npm root -g', { encoding: 'utf8', timeout: 5000 }).trim();
         const globalServer = path.join(npmRoot, 'cursor-agent-a2a', 'dist', 'index.js');
         if (existsSync(globalServer)) return globalServer;
     } catch {
-        // npm が使えない場合はスキップ
+        // スキップ
     }
 
-    // 3. pnpm グローバルインストール検索
+    // 4. pnpm グローバルインストール検索
     try {
         const pnpmRoot = execSync('pnpm root -g 2>/dev/null', { encoding: 'utf8', timeout: 5000 }).trim();
         const pnpmServer = path.join(pnpmRoot, 'cursor-agent-a2a', 'dist', 'index.js');
         if (existsSync(pnpmServer)) return pnpmServer;
     } catch {
-        // pnpm が使えない場合はスキップ
+        // スキップ
     }
 
-    // 4. cursor-agent-a2a コマンドを which で検索した結果から実体を推測
+    // 5. cursor-agent-a2a コマンドを which で検索
     try {
         const result = execSync('which cursor-agent-a2a 2>/dev/null', {
             encoding: 'utf8',
             timeout: 5000,
         }).trim();
-        if (result && existsSync(result)) {
-            // which で見つかったものは bin スクリプトの可能性があるため、そのまま返す。
-            // ただし、直接実行すると install を要求される可能性がある。
-            return result;
-        }
+        if (result && existsSync(result)) return result;
     } catch {
-        // コマンドが見つからない場合はスキップ
+        // スキップ
     }
 
     throw new Error(
-        '[ServerManager] Could not locate cursor-agent-a2a. \n' +
-        'Install locally:  npm install cursor-agent-a2a\n' +
-        'Install globally: npm install -g cursor-agent-a2a\n' +
-        'Or specify `autoStart.serverPath` in your configuration.'
+        '[ServerManager] Could not locate Cursor A2A server. \n' +
+        'Please build the project first or install cursor-agent-a2a globally.'
     );
 }
 
@@ -121,7 +190,8 @@ interface ManagedServer {
  */
 export class ServerManager {
     private static instance: ServerManager | undefined;
-    private servers = new Map<number, ManagedServer>(); // keyed by port
+    private servers = new Map<string, ManagedServer>(); // keyed by "host:port"
+    private startingUp = new Map<string, Promise<void>>();
     private cleanupRegistered = false;
     private cleanupHandlers: Array<{ event: string; handler: (...args: unknown[]) => void }> = [];
 
@@ -134,109 +204,156 @@ export class ServerManager {
         return ServerManager.instance;
     }
 
+    private getKey(port: number, host: string): string {
+        return `${host}:${port}`;
+    }
+
     async ensureRunning(
         port: number,
         host: string,
         modelId: string,
         config: AutoStartConfig,
-        debug: boolean
+        debug: boolean = false
     ): Promise<() => void> {
-        // 既に外部プロセスがリッスンしているか確認
+        const key = this.getKey(port, host);
+
+        // 1. 既に管理されているか確認
+        const existing = this.servers.get(key);
+        if (existing) {
+            existing.refCount++;
+            logger.info(`Reusing managed CursorAgent server on ${key} (refCount=${existing.refCount})`);
+            return this.makeReleaseFn(key, existing.proc);
+        }
+
+        // 2. 起動中なら待機
+        const ongoing = this.startingUp.get(key);
+        if (ongoing) {
+            await ongoing;
+            return this.ensureRunning(port, host, modelId, config, debug);
+        }
+
+        // 3. 起動/ポーリング プロセス
+        const startupPromise = (async () => {
+            // 既に外部プロセスがリッスンしているか確認 (自律サーバーかどうかも含む)
+            if (await probePort(port, host)) {
+                logger.info(`Port ${key} already listening (internal or compatible). Skipping auto-start.`);
+                return;
+            }
+
+            const serverPath = resolveServerPath(config.serverPath);
+            const env: Record<string, string> = {
+                ...(process.env as Record<string, string>),
+                PORT: String(port),
+                HOST: host,
+                CURSOR_DEFAULT_MODEL: modelId,
+                ...config.env,
+            };
+
+            const isTs = serverPath.endsWith('.ts');
+            const args = isTs ? ['tsx', serverPath] : [serverPath];
+            const cmd = isTs ? 'npx' : 'node';
+
+            logger.info(`Starting CursorAgent server: ${serverPath} (port=${port}, host=${host})`);
+
+            const proc = spawn(cmd, args, {
+                env,
+                stdio: debug ? (isTs ? 'inherit' : ['ignore', 'pipe', 'pipe']) : 'ignore',
+                detached: false,
+                shell: process.platform === 'win32',
+            });
+
+            if (debug && !isTs && proc.stdout) {
+                proc.stdout.on('data', (d: Buffer) => process.stdout.write(`[CursorAgent-${port}] ${d}`));
+            }
+            if (debug && !isTs && proc.stderr) {
+                proc.stderr.on('data', (d: Buffer) => process.stderr.write(`[CursorAgent-${port}] ${d}`));
+            }
+
+            const pollMs = config.pollIntervalMs ?? 200;
+            const timeoutMs = config.startupTimeoutMs ?? 15000;
+
+            try {
+                await new Promise<void>((resolve, reject) => {
+                    const timeoutId = setTimeout(() => {
+                        done(new Error(`[ServerManager] Server did not become ready on ${key} within ${timeoutMs}ms`));
+                    }, timeoutMs);
+
+                    const pollInterval = setInterval(async () => {
+                        if (await probePort(port, host)) {
+                            done();
+                        }
+                    }, pollMs);
+
+                    const onError = (err: Error) => done(new Error(`Server spawn error: ${err.message}`));
+                    const onExit = (code: number | null, signal: string | null) => 
+                        done(new Error(`Server exited prematurely (code: ${code}, signal: ${signal})`));
+
+                    proc.on('error', onError);
+                    proc.once('exit', onExit);
+
+                    function done(err?: Error) {
+                        clearTimeout(timeoutId);
+                        clearInterval(pollInterval);
+                        proc.removeListener('error', onError);
+                        proc.removeListener('exit', onExit);
+                        if (err) reject(err);
+                        else resolve();
+                    }
+                });
+            } catch (err) {
+                proc.kill();
+                throw err;
+            }
+
+            // 起動成功後に登録
+            const entry: ManagedServer = { proc, port, host, refCount: 0 }; 
+            this.servers.set(key, entry);
+            this.registerCleanup();
+
+            const cleanupExit = () => {
+                if (this.servers.get(key)?.proc === proc) {
+                    logger.info(`CursorAgent server on ${key} exited.`);
+                    this.servers.delete(key);
+                }
+            };
+            proc.once('exit', cleanupExit);
+        })();
+
+        this.startingUp.set(key, startupPromise);
+        try {
+            await startupPromise;
+        } finally {
+            this.startingUp.delete(key);
+        }
+
+        // 4. 最終確認して解放関数を返す
+        const managed = this.servers.get(key);
+        if (managed) {
+            managed.refCount++;
+            return this.makeReleaseFn(key, managed.proc);
+        }
+
+        // 外部サーバーだった場合
         if (await probePort(port, host)) {
-            Logger.info(`Port ${host}:${port} already listening. Skipping auto-start.`);
             return () => {};
         }
 
-        // 既に本マネージャーが管理しているプロセスが存在するか確認
-        const existing = this.servers.get(port);
-        if (existing) {
-            existing.refCount++;
-            Logger.info(`Reusing managed CursorAgent server on ${host}:${port} (refCount=${existing.refCount})`);
-            return this.makeReleaseFn(port);
-        }
-
-        // 新規起動
-        const serverPath = resolveServerPath(config.serverPath);
-        const env: Record<string, string> = {
-            ...process.env as Record<string, string>,
-            PORT: String(port),
-            HOST: host,
-            // CURSOR_AGENT_API_KEY が cursor-agent-a2a の正式な認証環境変数
-            ...config.env,
-        };
-
-        // デフォルトモデルが指定されている場合
-        if (modelId) {
-            env['CURSOR_DEFAULT_MODEL'] = modelId;
-        }
-
-        Logger.info(`Starting cursor-agent-a2a server: ${serverPath} (port=${port}, host=${host}, model=${modelId})`);
-
-        // cursor-agent-a2a CLI コマンドで直接起動を試みる
-        // グローバル: cursor-agent-a2a start, またはスクリプト: node <path>
-        const args = serverPath.endsWith('.js') || serverPath.endsWith('.mjs')
-            ? [serverPath]
-            : [];
-        const cmd = args.length > 0 ? 'node' : serverPath;
-
-        const proc = spawn(cmd, args, {
-            env,
-            stdio: debug ? ['ignore', 'pipe', 'pipe'] : 'ignore',
-            detached: false,
-        });
-
-        if (debug && proc.stdout) {
-            proc.stdout.on('data', (d: Buffer) => process.stdout.write(`[CursorAgent-${port}] ${d}`));
-        }
-        if (debug && proc.stderr) {
-            proc.stderr.on('data', (d: Buffer) => process.stderr.write(`[CursorAgent-${port}] ${d}`));
-        }
-
-        const entry: ManagedServer = { proc, port, host, refCount: 1 };
-        this.servers.set(port, entry);
-        this.registerCleanup();
-
-        const pollMs = config.pollIntervalMs ?? 200;
-        const timeoutMs = config.startupTimeoutMs ?? 15000;
-        try {
-            await Promise.race([
-                waitForPort(port, host, timeoutMs, pollMs),
-                new Promise<void>((_, reject) => {
-                    proc.on('error', (err) => reject(new Error(`CursorAgent spawn error: ${err.message}`)));
-                    proc.once('exit', (code) => {
-                        if (code !== 0 && code !== null) {
-                            reject(new Error(`CursorAgent exited early with code ${code}`));
-                        }
-                    });
-                }),
-            ]);
-        } catch (err) {
-            proc.kill();
-            this.servers.delete(port);
-            throw err;
-        }
-
-        proc.once('exit', (code) => {
-            Logger.info(`CursorAgent server on port ${port} exited (code=${code})`);
-            this.servers.delete(port);
-        });
-
-        Logger.info(`CursorAgent server on ${host}:${port} is ready.`);
-        return this.makeReleaseFn(port);
+        throw new Error(`[ServerManager] Failed to ensure server is running on ${key}`);
     }
 
-    private makeReleaseFn(port: number): () => void {
+    private makeReleaseFn(key: string, proc: ChildProcess): () => void {
         let released = false;
         return () => {
             if (released) return;
             released = true;
-            const entry = this.servers.get(port);
-            if (!entry) return;
+            const entry = this.servers.get(key);
+            if (!entry || entry.proc !== proc) return;
+
             entry.refCount--;
-            Logger.debug(`Released CursorAgent server on port ${port} (refCount=${entry.refCount})`);
+            logger.info(`Released CursorAgent server on ${key} (refCount=${entry.refCount})`);
             if (entry.refCount <= 0) {
                 entry.proc.kill();
-                this.servers.delete(port);
+                this.servers.delete(key);
             }
         };
     }
@@ -247,7 +364,7 @@ export class ServerManager {
 
         const exitHandler = () => { try { this.dispose(); } catch { /**/ } };
         const makeSignalHandler = (signal: NodeJS.Signals) => () => {
-            Logger.info(`[ServerManager] Received ${signal}, cleaning up...`);
+            logger.info(`[ServerManager] Received ${signal}, cleaning up...`);
             try { this.dispose(); } catch { /**/ }
             const h = this.cleanupHandlers.find(ch => ch.event === signal);
             if (h) process.off(signal, h.handler as NodeJS.SignalsListener);

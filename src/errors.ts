@@ -4,7 +4,7 @@
  * CursorCLI が未インストールまたは検出不能な場合に throw するエラー。
  */
 export class CursorCLINotFoundError extends Error {
-    constructor(message = 'CursorCLI (cursor-agent) is not installed or could not be found. Please install it and ensure it is in your PATH.') {
+    constructor(message = 'cursor-agent-a2a is not installed or could not be found. Please install it and ensure it is in your PATH.') {
         super(message);
         this.name = 'CursorCLINotFoundError';
     }
@@ -16,7 +16,7 @@ export class CursorCLINotFoundError extends Error {
 export class A2ATimeoutError extends Error {
     readonly timeoutMs: number;
     constructor(timeoutMs: number, endpoint: string) {
-        super(`A2A request timed out after ${timeoutMs}ms waiting for CursorAgent at ${endpoint}`);
+        super(`A2A request timed out after ${timeoutMs}ms waiting for cursor-agent-a2a at ${endpoint}`);
         this.name = 'A2ATimeoutError';
         this.timeoutMs = timeoutMs;
     }
@@ -41,10 +41,10 @@ export class A2AProtocolError extends Error {
  */
 export function formatErrorForUI(error: unknown): string {
     if (error instanceof CursorCLINotFoundError) {
-        return `⚠️ CursorCLI Not Found\n\n${error.message}\n\nPlease install CursorCLI and ensure it is available in PATH, then restart OpenCode.`;
+        return `⚠️ cursor-agent-a2a Not Found\n\n${error.message}\n\nPlease install cursor-agent-a2a and ensure it is available in PATH, then restart OpenCode.`;
     }
     if (error instanceof A2ATimeoutError) {
-        return `⏱️ A2A Connection Timeout\n\n${error.message}\n\nCheck that the CursorAgent server is running and accessible.`;
+        return `⏱️ A2A Connection Timeout\n\n${error.message}\n\nCheck that the cursor-agent-a2a server is running and accessible.`;
     }
     if (error instanceof A2AProtocolError) {
         return `🔴 A2A Protocol Error\n\nCode: ${error.code}\n${error.message}`;
@@ -52,13 +52,13 @@ export function formatErrorForUI(error: unknown): string {
     if (error instanceof Error) {
         // ECONNREFUSED — サーバー未起動の可能性
         if (error.message.includes('ECONNREFUSED') || error.message.includes('Unable to connect')) {
-            return `🔴 Cannot Connect to CursorAgent\n\nFailed to connect to the CursorCLI A2A server.\nPlease ensure the server is running and the host/port is correctly configured.\n\nDetail: ${error.message}`;
+            return `🔴 Cannot Connect to cursor-agent-a2a\n\nFailed to connect to the cursor-agent-a2a server.\nPlease ensure the server is running and the host/port is correctly configured.\n\nDetail: ${error.message}`;
         }
         // 401 / 403 — 認証エラー
         if (error.message.includes('401') || error.message.includes('403') || error.message.includes('Unauthorized')) {
-            return `🔒 Authentication Error\n\nFailed to authenticate with CursorAgent. Check your API token configuration.\n\nDetail: ${error.message}`;
+            return `🔒 Authentication Error\n\nFailed to authenticate with cursor-agent-a2a. Check your API token configuration.\n\nDetail: ${error.message}`;
         }
-        return `❌ CursorCLI A2A Error\n\n${error.message}`;
+        return `❌ cursor-agent-a2a Error\n\n${error.message}`;
     }
     return `❌ Unknown Error\n\n${String(error)}`;
 }
