@@ -44,11 +44,18 @@ export interface AgentTriggerConfig {
 // エラー時フォールバック設定
 // ---------------------------------------------------------------------------
 export interface FallbackConfig {
-    /** サーバーエラー時にローカル LLM または別のプロバイダーにフォールバックするか */
+    /** フォールバック機能を有効にするか (デフォルト: false) */
     enabled?: boolean;
-    /** フォールバック先として検討するモデル ID リスト */
+    /**
+     * モデルIDの優先順位リスト。
+     * リクエスト元のモデルが枯渇した場合、このリスト内でそれより後にあるモデルへ順に切り替わる。
+     */
+    fallbackChain?: string[];
+    /** @deprecated models は fallbackChain にリネームされました。互換性のために残されています。 */
     models?: string[];
-    /** 最大試行回数 */
+    /** クォータエラーとして検知する追加のテキストパターン */
+    quotaErrorPatterns?: string[];
+    /** 最大試行回数 (デフォルト: 2) */
     maxRetries?: number;
 }
 

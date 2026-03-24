@@ -92,9 +92,19 @@ export class A2AClient {
     /** `/projects` エンドポイントを使用して projectId を取得または作成する */
     private async resolveProjectId(workspace: string = process.cwd()): Promise<string> {
         const token = this.getToken();
+        const isSecure = this.isSecureEndpoint();
+
+        if (token && !isSecure) {
+            throw new APICallError({
+                message: 'A2AClient: Token cannot be sent over an insecure non-localhost connection.',
+                url: `${this.baseUrl}/projects`,
+                isRetryable: false,
+            });
+        }
+
         const headers: Record<string, string> = { 'Content-Type': 'application/json' };
         
-        if (token && this.isSecureEndpoint()) {
+        if (token && isSecure) {
             headers['Authorization'] = `Bearer ${token}`;
         }
 
@@ -133,7 +143,7 @@ export class A2AClient {
         if (token && !isSecure) {
             throw new APICallError({
                 message: 'A2AClient: Token cannot be sent over an insecure non-localhost connection.',
-                url: `${this.baseUrl}/(projectId)/messages?stream=true`,
+                url: `${this.baseUrl}/:projectId/messages?stream=true`,
                 requestBodyValues: request,
                 isRetryable: false,
             });

@@ -161,7 +161,11 @@ function buildMessageText(prompt: LanguageModelV1Prompt, options?: MapPromptOpti
             }
         } else if (msg.role === 'tool') {
             for (const result of msg.content) {
-                parts.push(`[Tool Result: ${(result as { toolName?: string; toolCallId?: string }).toolName ?? (result as { toolCallId?: string }).toolCallId}]\n${JSON.stringify((result as { result?: unknown }).result, null, 2)}`);
+                const r = result as any;
+                const label = r.toolName ?? r.toolCallId ?? 'unknown';
+                const resultValue = (r && typeof r === 'object' && 'result' in r) ? r.result : r;
+                const content = JSON.stringify(resultValue, null, 2);
+                parts.push(`[Tool Result: ${label}]\n${content}`);
             }
         }
     }
@@ -267,6 +271,18 @@ export class CursorA2AStreamMapper {
                         id: this._textId,
                         delta,
                     } as LanguageModelV1StreamPart);
+                }
+                break;
+            }
+
+            case 'thinking':
+            case 'reasoning': {
+                const text = event.text;
+                if (text) {
+                    parts.push({
+                        type: 'reasoning',
+                        text,
+                    } as any);
                 }
                 break;
             }
