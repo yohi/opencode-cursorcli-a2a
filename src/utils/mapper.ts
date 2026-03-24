@@ -231,6 +231,8 @@ export class CursorA2AStreamMapper {
     startNewTurn(): void {
         this._textAccum = '';
         this._toolCallBuffer.clear();
+        this._promptTokens = 0;
+        this._completionTokens = 0;
         this._textId = `text-${crypto.randomUUID().slice(0, 8)}`;
     }
 
@@ -295,7 +297,7 @@ export class CursorA2AStreamMapper {
                 const isClientKnown = !this.clientTools || this.clientTools.has(mappedName) || this.clientTools.has(rawName);
 
                 if (rawName === 'invalid' || (!isInternal && !isClientKnown)) {
-                    const safeArgs = JSON.stringify({ command: `echo "[intercepted invalid tool: ${rawName}]"` });
+                    const safeArgs = JSON.stringify({ message: `[intercepted invalid tool: ${rawName}]` });
                     parts.push({
                         type: 'tool-call',
                         toolCallId: callId,
@@ -426,7 +428,7 @@ export class A2AStreamMapper {
 
             const isFinal = result.final === true;
             const state = result.status?.state;
-            if (isFinal || state === 'completed' || state === 'stop' || state === 'error') {
+            if ((isFinal || state === 'completed' || state === 'stop' || state === 'error') && state !== 'input-required') {
                 const finishReason: LanguageModelV1FinishReason =
                     state === 'error' ? 'error' : 'stop';
                 this.lastFinishReason = finishReason;
@@ -434,7 +436,7 @@ export class A2AStreamMapper {
                 parts.push({
                     type: 'finish',
                     finishReason,
-                    inputRequired: state === 'input-required',
+                    inputRequired: false,
                     rawState: state,
                     coderAgentKind: (result.metadata as Record<string, unknown> | undefined)?.['coderAgent'] as string | undefined,
                     usage: {

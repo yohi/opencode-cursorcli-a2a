@@ -44,7 +44,10 @@ function extractContext(...args: any[]): Record<string, any> {
             return { error: arg };
         }
         if (typeof arg === 'object' && arg !== null && !Array.isArray(arg)) {
-            return arg;
+            const proto = Object.getPrototypeOf(arg);
+            if (proto === Object.prototype || proto === null) {
+                return arg;
+            }
         }
     }
     return { args };
@@ -72,10 +75,10 @@ export const logger = {
         console.error(safeStringify({ ...context, level: 'error', prefix: LOG_PREFIX, message: msg, timestamp: new Date().toISOString() }));
     },
     child: (baseContext: Record<string, any>) => ({
-        debug: (msg: string, context?: Record<string, any>) => logger.debug(msg, { ...baseContext, ...context }),
-        info: (msg: string, context?: Record<string, any>) => logger.info(msg, { ...baseContext, ...context }),
-        warn: (msg: string, context?: Record<string, any>) => logger.warn(msg, { ...baseContext, ...context }),
-        error: (msg: string, context?: Record<string, any>) => logger.error(msg, { ...baseContext, ...context }),
+        debug: (msg: string, ...args: any[]) => logger.debug(msg, { ...baseContext, ...extractContext(...args) }),
+        info: (msg: string, ...args: any[]) => logger.info(msg, { ...baseContext, ...extractContext(...args) }),
+        warn: (msg: string, ...args: any[]) => logger.warn(msg, { ...baseContext, ...extractContext(...args) }),
+        error: (msg: string, ...args: any[]) => logger.error(msg, { ...baseContext, ...extractContext(...args) }),
     })
 };
 

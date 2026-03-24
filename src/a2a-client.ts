@@ -42,7 +42,10 @@ export class A2AClient {
 
     constructor(config: A2AConfig) {
         this.config = config;
-        this.baseUrl = `${config.protocol ?? 'http'}://${config.host}:${config.port}`;
+        const hostPart = (config.host.includes(':') && !config.host.startsWith('[')) 
+            ? `[${config.host}]` 
+            : config.host;
+        this.baseUrl = `${config.protocol ?? 'http'}://${hostPart}:${config.port}`;
     }
 
     private isSecureEndpoint(): boolean {
@@ -124,7 +127,20 @@ export class A2AClient {
     /** `/:projectId/messages?stream=true` エンドポイントにストリーミングリクエストを送信する */
     async chatStream({ request, idempotencyKey, abortSignal, traceId, workspace }: ChatStreamOptions): Promise<ChatStreamResponse> {
         const finalTraceId = traceId || crypto.randomUUID();
-        const projectId = await this.resolveProjectId(workspace);
+        const token = this.getToken();
+        const isSecure = this.isSecureEndpoint();
+
+        if (token && !isSecure) {
+            throw new APICallError({
+                message: 'A2AClient: Token cannot be sent over an insecure non-localhost connection.',
+                url: `${this.baseUrl}/(projectId)/messages?stream=true`,
+                requestBodyValues: request,
+                isRetryable: false,
+            });
+        }
+
+        const effectiveWorkspace = request.context?.workspace || workspace || process.cwd();
+        const projectId = await this.resolveProjectId(effectiveWorkspace);
         const url = `${this.baseUrl}/${projectId}/messages?stream=true`;
 
         const headers: Record<string, string> = {
@@ -137,23 +153,19 @@ export class A2AClient {
             headers['Idempotency-Key'] = idempotencyKey;
         }
 
-        const token = this.getToken();
-        if (token) {
-            if (this.isSecureEndpoint()) {
-                headers['Authorization'] = `Bearer ${token}`;
-            } else {
-                throw new APICallError({
-                    message: 'A2AClient: Token cannot be sent over an insecure non-localhost connection.',
-                    url,
-                    requestBodyValues: request,
-                    isRetryable: false,
-                });
-            }
+        if (token && isSecure) {
+            headers['Authorization'] = `Bearer ${token}`;
         }
 
         const retryCount = idempotencyKey ? 3 : 0;
 
-        const redactedRequest = { ...request, model: request.model ?? '(default)' };
+        const redactedRequest = {
+            model: request.model ?? '(default)',
+            traceId: finalTraceId,
+            workspace: effectiveWorkspace,
+            messageLength: request.message.length,
+            selectedCodeLength: request.context?.selectedCode?.length ?? 0
+        };
         Logger.debug(`POST ${url}`, JSON.stringify(redactedRequest));
 
         try {
