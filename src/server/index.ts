@@ -161,7 +161,7 @@ app.post('/:projectId/messages', authMiddleware, async (req: express.Request, re
                 } else if (eventType === 'error') {
                     normalizedEvent = {
                         type: 'error',
-                        message: event.message || String(event.error || 'Unknown error'),
+                        message: event.message || event.content || String(event.error || 'Unknown error'),
                         code: event.code
                     };
                 } else if (eventType === 'tool_use' || eventType === 'info' || eventType === 'warning') {
