@@ -115,12 +115,13 @@ function resetProvider(): void {
 }
 
 /** OpenCode が require() でロードした際のデフォルトエクスポート */
-const provider = new Proxy({} as CursorA2AProvider, {
+const provider = new Proxy((() => {}) as unknown as CursorA2AProvider, {
     apply(_target, _thisArg, args) {
         const p = initProvider();
         return (p as unknown as (...a: unknown[]) => unknown)(...args);
     },
     get(_target, prop, _receiver) {
+        if (prop === 'prototype') return undefined; // Avoid issues with inheritance checks
         const p = initProvider();
         const val = (p as Record<string | symbol, unknown>)[prop];
         if (typeof val === 'function') return val.bind(p);

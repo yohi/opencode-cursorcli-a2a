@@ -72,6 +72,7 @@ export class OpenCodeCursorA2AProvider {
     }
 
     private init(): void {
+        this._serverReady = null;
         try {
             const config = resolveConfig(this.options);
             const router = config.agents ? new DefaultMultiAgentRouter(config.agents) : undefined;
@@ -80,10 +81,11 @@ export class OpenCodeCursorA2AProvider {
 
             const finalConfig = {
                 ...config,
-                host: agentEndpoint?.host ?? config.host,
-                port: agentEndpoint?.port ?? config.port,
-                token: agentEndpoint?.token ?? config.token,
-                protocol: agentEndpoint?.protocol ?? config.protocol,
+                ...resolved?.config, // 個別モデル設定 (host, port 等が含まれる可能性あり)
+                host: agentEndpoint?.host ?? resolved?.config?.host ?? config.host,
+                port: agentEndpoint?.port ?? resolved?.config?.port ?? config.port,
+                token: agentEndpoint?.token ?? resolved?.config?.token ?? config.token,
+                protocol: agentEndpoint?.protocol ?? resolved?.config?.protocol ?? config.protocol,
             };
 
             const newSessionStore = this.options?.sessionStore ?? this.sessionStore ?? new InMemorySessionStore();
@@ -94,6 +96,7 @@ export class OpenCodeCursorA2AProvider {
             this.fallbackConfig = newFallbackConfig;
             this.resolvedOptions = {
                 ...this.options,
+                ...resolved?.config,
                 host: finalConfig.host,
                 port: finalConfig.port,
                 token: finalConfig.token,
@@ -206,6 +209,7 @@ export class OpenCodeCursorA2AProvider {
 
         const fallbackProvider = new OpenCodeCursorA2AProvider(nextModelId, {
             ...this.options,
+            sessionStore: this.sessionStore,
             hotReload: false,
         });
         return fallbackProvider.doStream({
