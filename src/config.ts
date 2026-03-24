@@ -171,7 +171,10 @@ export class ConfigManager {
     }
 
     public load(): void {
-        if (!existsSync(this.configPath)) return;
+        if (!existsSync(this.configPath)) {
+            this.externalConfig = {};
+            return;
+        }
         try {
             const content = readFileSync(this.configPath, 'utf8');
             const parsed = JSON.parse(content);
@@ -179,6 +182,7 @@ export class ConfigManager {
             this.externalConfig = validated;
             Logger.info(`[ConfigManager] Loaded config from ${this.configPath}`);
         } catch (err) {
+            this.externalConfig = {};
             Logger.error(`[ConfigManager] Failed to load config from ${this.configPath}:`, err);
         }
     }
@@ -222,7 +226,13 @@ export class ConfigManager {
                         }
                         
                         if (loadSuccess) {
-                            for (const cb of this.watchers) cb();
+                            for (const cb of this.watchers) {
+                                try {
+                                    cb();
+                                } catch (cbErr) {
+                                    Logger.error(`[ConfigManager] Error in config watcher callback:`, cbErr);
+                                }
+                            }
                         }
                     }, 300);
                 }
@@ -327,10 +337,10 @@ export function resolveConfig(options?: OpenCodeProviderOptions): A2AConfig & {
     const envWorkspace = getNormalizedValue(process.env['CURSOR_A2A_WORKSPACE']);
 
     const mergedConfig = {
-        host: getNormalizedValue(options?.host) ?? external.host ?? envHost,
+        host: getNormalizedValue(options?.host) ?? getNormalizedValue(external.host) ?? envHost,
         port: options?.port ?? external.port ?? envPort,
-        token: getNormalizedValue(options?.token) ?? external.token ?? envToken,
-        protocol: (getNormalizedValue(options?.protocol) ?? external.protocol ?? envProtocol) as 'http' | 'https' | undefined,
+        token: getNormalizedValue(options?.token) ?? getNormalizedValue(external.token) ?? envToken,
+        protocol: (getNormalizedValue(options?.protocol) ?? getNormalizedValue(external.protocol) ?? envProtocol) as 'http' | 'https' | undefined,
         generationConfig: options?.generationConfig,
     };
 
@@ -349,7 +359,7 @@ export function resolveConfig(options?: OpenCodeProviderOptions): A2AConfig & {
         agents: options?.agents ?? external.agents,
         triggerConfig: options?.triggerConfig ?? external.triggerConfig,
         contextConfig: options?.contextConfig ?? external.contextConfig,
-        cursorModel: getNormalizedValue(options?.cursorModel) ?? external.cursorModel ?? envCursorModel,
-        workspace: getNormalizedValue(options?.workspace) ?? external.workspace ?? envWorkspace,
+        cursorModel: getNormalizedValue(options?.cursorModel) ?? getNormalizedValue(external.cursorModel) ?? envCursorModel,
+        workspace: getNormalizedValue(options?.workspace) ?? getNormalizedValue(external.workspace) ?? envWorkspace,
     };
 }
