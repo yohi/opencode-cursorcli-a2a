@@ -225,26 +225,25 @@ export class ConfigManager {
         }
     }
 
-    /** テスト用: インスタンスをリセット */
-    static _reset(): void {
+    static disposeIfExists(): void {
         ConfigManager.instance?.dispose();
         ConfigManager.instance = undefined;
     }
 
     public onChange(cb: () => void): () => void {
-        this.watchers.add(cb);
-        return () => this.watchers.delete(cb);
-    }
+    this.watchers.add(cb);
+    return () => this.watchers.delete(cb);
+}
 }
 
 // ---------------------------------------------------------------------------
 // ユーティリティ: 空文字・"null"・"undefined" 文字列を undefined 化
 // ---------------------------------------------------------------------------
-function getNormalizedValue<T>(val: T): T | undefined {
-    if (typeof val !== 'string') return (val === null ? undefined : val) as T | undefined;
-    const trimmed = (val as string).trim();
-    if (trimmed === '' || trimmed === 'undefined' || trimmed === 'null') return undefined;
-    return trimmed as unknown as T;
+function getNormalizedValue(val: string | null | undefined): string | undefined {
+if (typeof val !== 'string') return undefined;
+const trimmed = val.trim();
+if (trimmed === '' || trimmed === 'undefined' || trimmed === 'null') return undefined;
+return trimmed;
 }
 
 const parseSchema = z.object({
@@ -295,7 +294,8 @@ export function resolveConfig(options?: OpenCodeProviderOptions): A2AConfig & {
     const external = manager.getExternalConfig() as z.infer<typeof ExternalConfigSchema>;
 
     const envHost = getNormalizedValue(process.env['CURSOR_A2A_HOST']);
-    const envPort = getNormalizedValue(process.env['CURSOR_A2A_PORT'] ?? process.env['PORT']);
+    const envPortRaw = getNormalizedValue(process.env['CURSOR_A2A_PORT'] ?? process.env['PORT']);
+    const envPort = envPortRaw ? Number(envPortRaw) : undefined;
     // cursor-agent-a2a の認証トークン (CURSOR_AGENT_API_KEY が正式)
     const envToken = getNormalizedValue(
         process.env['CURSOR_AGENT_API_KEY'] ?? process.env['CURSOR_A2A_TOKEN']
@@ -306,9 +306,9 @@ export function resolveConfig(options?: OpenCodeProviderOptions): A2AConfig & {
 
     const mergedConfig = {
         host: getNormalizedValue(options?.host) ?? external.host ?? envHost,
-        port: getNormalizedValue(options?.port) ?? external.port ?? (envPort ? Number(envPort) : undefined),
+        port: (typeof options?.port === 'number' ? options.port : (typeof options?.port === 'string' ? Number(getNormalizedValue(options.port)) : undefined)) ?? external.port ?? envPort,
         token: getNormalizedValue(options?.token) ?? external.token ?? envToken,
-        protocol: getNormalizedValue(options?.protocol) ?? external.protocol ?? (envProtocol as 'http' | 'https' | undefined),
+        protocol: (getNormalizedValue(options?.protocol) ?? external.protocol ?? envProtocol) as 'http' | 'https' | undefined,
         generationConfig: options?.generationConfig,
     };
 

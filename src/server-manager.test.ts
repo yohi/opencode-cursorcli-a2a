@@ -103,6 +103,23 @@ describe('ServerManager', () => {
         const modelId = 'auto';
         const config = { pollIntervalMs: 10, startupTimeoutMs: 2000 };
 
+        // 1回目は TCP 接続失敗 (サーバー未起動)
+        (createConnection as any).mockReturnValueOnce({
+            once: vi.fn().mockImplementation((event, handler) => {
+                if (event === 'error') setTimeout(handler, 0);
+            }),
+            destroy: vi.fn(),
+            setTimeout: vi.fn(),
+        });
+        // 2回目以降 (waitForPort等) は成功
+        (createConnection as any).mockReturnValue({
+            once: vi.fn().mockImplementation((event, handler) => {
+                if (event === 'connect') setTimeout(handler, 0);
+            }),
+            destroy: vi.fn(),
+            setTimeout: vi.fn(),
+        });
+
         global.fetch = vi.fn()
             .mockResolvedValueOnce({ ok: false })
             .mockResolvedValue({
@@ -137,6 +154,22 @@ describe('ServerManager', () => {
         const host = '127.0.0.1';
         const modelId = 'auto';
         const config = { pollIntervalMs: 10, startupTimeoutMs: 2000 };
+
+        // TCP 接続モックの制御
+        (createConnection as any).mockReturnValueOnce({
+            once: vi.fn().mockImplementation((event, handler) => {
+                if (event === 'error') setTimeout(handler, 0);
+            }),
+            destroy: vi.fn(),
+            setTimeout: vi.fn(),
+        });
+        (createConnection as any).mockReturnValue({
+            once: vi.fn().mockImplementation((event, handler) => {
+                if (event === 'connect') setTimeout(handler, 0);
+            }),
+            destroy: vi.fn(),
+            setTimeout: vi.fn(),
+        });
 
         const exitHandlers: Set<(code: number | null, signal: string | null) => void> = new Set();
         const mockProc = {

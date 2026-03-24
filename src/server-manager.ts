@@ -12,6 +12,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { logger } from './utils/logger.js';
+import { ConfigManager } from './config.js';
 
 const execAsync = promisify(exec);
 
@@ -131,7 +132,7 @@ export async function resolveServerPath(overridePath?: string): Promise<string> 
 
     // 4. pnpm グローバルインストール検索
     try {
-        const { stdout } = await execAsync('pnpm root -g 2>/dev/null', { timeout: 2000 });
+        const { stdout } = await execAsync('pnpm root -g', { timeout: 2000 });
         const pnpmRoot = stdout.trim();
         const pnpmServer = path.join(pnpmRoot, 'cursor-agent-a2a', 'dist', 'index.js');
         if (existsSync(pnpmServer)) return pnpmServer;
@@ -139,12 +140,12 @@ export async function resolveServerPath(overridePath?: string): Promise<string> 
         // スキップ
     }
 
-    // 5. cursor-agent-a2a コマンドを which で検索
+    // 5. cursor-agent-a2a コマンドを which/where で検索
     try {
-        const { stdout } = await execAsync('which cursor-agent-a2a 2>/dev/null', {
-            timeout: 2000,
-        });
-        const result = stdout.trim();
+        const isWin = process.platform === 'win32';
+        const cmd = isWin ? 'where cursor-agent-a2a' : 'which cursor-agent-a2a';
+        const { stdout } = await execAsync(cmd, { timeout: 2000 });
+        const result = stdout.trim().split('\n')[0].trim();
         if (result && existsSync(result)) return result;
     } catch {
         // スキップ
@@ -373,6 +374,7 @@ export class ServerManager {
             process.removeListener(event, handler as (...args: unknown[]) => void);
         }
         this.cleanupHandlers = [];
+        try { ConfigManager.disposeIfExists(); } catch { /**/ }
     }
 
     static _reset() {
