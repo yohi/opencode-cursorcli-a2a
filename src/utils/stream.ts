@@ -39,6 +39,7 @@ async function* parseSSEStream<T>(
             const { done, value } = await reader.read();
             if (done) {
                 Logger.info('[Stream] Reader done');
+                buffer += decoder.decode(); // Flush any remaining bytes
                 break;
             }
             Logger.debug(`[Stream] Read ${value.length} bytes`);
