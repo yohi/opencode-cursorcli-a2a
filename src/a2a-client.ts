@@ -175,6 +175,7 @@ export class A2AClient {
 
             const url = `${this.baseUrl}/${projectId}/messages?stream=true`;
 
+            // 変数宣言 (指摘の順序: headers -> retryCount -> error-tracking locals)
             const headers: Record<string, string> = {
                 'Content-Type': 'application/json',
                 'Accept': 'text/event-stream',
@@ -190,6 +191,11 @@ export class A2AClient {
             }
 
             const retryCount = idempotencyKey ? 3 : 0;
+            
+            let lastError: Error | undefined = undefined;
+            let statusCode: number | undefined = undefined;
+            let responseBody: string | undefined = undefined;
+
             const redactedRequest = {
                 model: request.model ?? '(default)',
                 traceId: finalTraceId,
@@ -198,10 +204,6 @@ export class A2AClient {
                 selectedCodeLength: request.context?.selectedCode?.length ?? 0
             };
             Logger.info(`POST ${url}`, JSON.stringify(redactedRequest));
-
-            let lastError: Error | undefined;
-            let statusCode: number | undefined;
-            let responseBody: string | undefined;
 
             for (let attempt = 0; attempt <= retryCount; attempt++) {
                 try {
