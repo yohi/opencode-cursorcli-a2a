@@ -81,7 +81,7 @@ export function createCursorA2AProvider(options?: OpenCodeProviderOptions): Curs
 
     // Support for simple generate/dispose interface if needed
     fn.generate = async (prompt: string, config: any = {}) => {
-        const model = createModel(options?.modelId || 'auto', config);
+        const model = createModel(options?.cursorModel || 'auto', config);
         const result = await (model as any).doGenerate({
             inputFormat: 'prompt',
             mode: { type: 'regular' },
@@ -109,11 +109,9 @@ function initProvider(options?: OpenCodeProviderOptions): CursorA2AProvider {
 }
 
 function resetProvider(): void {
-    if (_provider) {
-        try { ConfigManager.getInstance().dispose(); } catch { /**/ }
-        try { (ServerManager as any)._reset(); } catch { /**/ }
-        _provider = null;
-    }
+    try { ConfigManager.getInstance().dispose(); } catch { /**/ }
+    try { ServerManager._reset(); } catch { /**/ }
+    _provider = null;
 }
 
 /** OpenCode が require() でロードした際のデフォルトエクスポート */

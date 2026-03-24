@@ -31,7 +31,7 @@ import type { CursorAgentMessageRequest } from './schemas.js';
  * AI SDK Language Model Specification V2 互換。
  */
 export class OpenCodeCursorA2AProvider {
-    readonly specificationVersion = 'v2' as const;
+    readonly specificationVersion = 'v1' as const;
     readonly provider = 'opencode-cursorcli-a2a';
     readonly providerId = 'opencode-cursorcli-a2a';
     readonly providerID = 'opencode-cursorcli-a2a';
@@ -196,7 +196,8 @@ export class OpenCodeCursorA2AProvider {
     ): Promise<LanguageModelV1StreamResult> {
         if (!this.fallbackConfig) throw originalError;
         const fallbackCount = (callOptions as Record<string, unknown>)['_fallbackCount'] as number ?? 0;
-        if (fallbackCount >= 3) throw originalError;
+        const maxRetries = this.fallbackConfig.maxRetries ?? 2;
+        if (fallbackCount >= maxRetries) throw originalError;
 
         const nextModelId = getNextFallbackModel(this.modelId, this.fallbackConfig);
         if (!nextModelId) throw originalError;

@@ -40,7 +40,8 @@ export class DefaultMultiAgentRouter implements MultiAgentRouter {
                 const modelEntry = endpoint.models[modelId];
                 if (modelEntry !== undefined) {
                     if (typeof modelEntry === 'boolean') {
-                        return modelEntry ? { endpoint } : undefined;
+                        if (modelEntry) return { endpoint };
+                        continue; // If false, try next endpoint
                     }
                     return { endpoint, config: modelEntry };
                 }

@@ -161,7 +161,10 @@ function buildMessageText(prompt: LanguageModelV1Prompt, options?: MapPromptOpti
             }
         } else if (msg.role === 'tool') {
             for (const result of msg.content) {
-                parts.push(`[Tool Result: ${(result as { toolName?: string; toolCallId?: string }).toolName ?? (result as { toolCallId?: string }).toolCallId}]\n${JSON.stringify((result as { result?: unknown }).result, null, 2)}`);
+                const r = result as any;
+                const label = r.toolName ?? r.toolCallId ?? 'unknown';
+                const content = JSON.stringify(r.result ?? r, null, 2);
+                parts.push(`[Tool Result: ${label}]\n${content}`);
             }
         }
     }

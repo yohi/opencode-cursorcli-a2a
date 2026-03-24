@@ -14,6 +14,8 @@ export interface FallbackConfig {
      * 例: ['cursor-agent-claude-4-opus', 'cursor-agent-gpt-4o', 'cursor-agent-fast']
      */
     fallbackChain: string[];
+    /** @deprecated fallbackChain を使用してください */
+    models?: string[];
     /**
      * クォータエラーとして検知する追加のテキストパターン。
      */
@@ -103,9 +105,10 @@ export function getNextFallbackModel(
 
 export function resolveFallbackConfig(config?: Partial<FallbackConfig>): FallbackConfig | undefined {
     if (!config || !config.enabled) return undefined;
+    const chain = config.fallbackChain ?? config.models ?? [];
     return {
         enabled: true,
-        fallbackChain: config.fallbackChain ? Array.from(new Set(config.fallbackChain)) : [],
+        fallbackChain: Array.from(new Set(chain)),
         quotaErrorPatterns: config.quotaErrorPatterns,
         maxRetries: config.maxRetries ?? 2,
     };
