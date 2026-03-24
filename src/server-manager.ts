@@ -45,6 +45,21 @@ export async function probePort(port: number, host: string): Promise<boolean> {
 }
 
 /**
+ * Resolves the current directory safely.
+ */
+function getCurrentDir(): string {
+    try {
+        // @ts-ignore: ESM-only property
+        if (typeof import.meta !== 'undefined' && import.meta.url) {
+            return path.dirname(fileURLToPath(import.meta.url));
+        }
+        return typeof __dirname !== 'undefined' ? __dirname : process.cwd();
+    } catch {
+        return process.cwd();
+    }
+}
+
+/**
  * Resolves the path to the internal or external server entry point.
  */
 export function resolveServerPath(overridePath?: string): string {
@@ -52,21 +67,10 @@ export function resolveServerPath(overridePath?: string): string {
         return overridePath;
     }
 
+    const currentDir = getCurrentDir();
+
     // 1. Internal Server (dist/server.js)
     try {
-        let currentDir: string;
-        try {
-            // @ts-ignore: ESM-only property
-            if (typeof import.meta !== 'undefined' && import.meta.url) {
-                currentDir = path.dirname(fileURLToPath(import.meta.url));
-            } else {
-                // Fallback for CJS
-                currentDir = typeof __dirname !== 'undefined' ? __dirname : process.cwd();
-            }
-        } catch {
-            currentDir = process.cwd();
-        }
-
         const internalServer = path.resolve(currentDir, '..', 'dist', 'server.js');
         if (existsSync(internalServer)) return internalServer;
         
@@ -79,17 +83,6 @@ export function resolveServerPath(overridePath?: string): string {
 
     // 2. Local node_modules fallback
     try {
-        let currentDir: string;
-        try {
-            // @ts-ignore: ESM-only property
-            if (typeof import.meta !== 'undefined' && import.meta.url) {
-                currentDir = path.dirname(fileURLToPath(import.meta.url));
-            } else {
-                currentDir = typeof __dirname !== 'undefined' ? __dirname : process.cwd();
-            }
-        } catch {
-            currentDir = process.cwd();
-        }
         const localServer = path.resolve(currentDir, '..', 'node_modules', 'cursor-agent-a2a', 'dist', 'index.js');
         if (existsSync(localServer)) return localServer;
     } catch {
@@ -137,7 +130,7 @@ export class ServerManager {
         const existing = this.servers.get(key);
         if (existing) {
             existing.refCount++;
-            return this.makeReleaseFn(key);
+            return this.makeReleaseFn(key, existing.proc);
         }
 
         // 2. Check if it is already being started by another call
@@ -214,7 +207,10 @@ export class ServerManager {
             const entry: ManagedServer = { proc, port, host, refCount: 0 }; 
             this.servers.set(key, entry);
 
-            // Stability: Remove from servers if it exits unexpectedly after startup
+            /**
+             * cleanupExit handler: can be called concurrently with makeReleaseFn.
+             * Safe because it checks proc identity and Map.delete is idempotent.
+             */
             const cleanupExit = () => {
                 if (this.servers.get(key)?.proc === proc) {
                     this.servers.delete(key);
@@ -234,7 +230,7 @@ export class ServerManager {
         const managed = this.servers.get(key);
         if (managed) {
             managed.refCount++;
-            return this.makeReleaseFn(key);
+            return this.makeReleaseFn(key, managed.proc);
         }
 
         // If it was an external server
@@ -245,10 +241,17 @@ export class ServerManager {
         throw new Error(`[ServerManager] Failed to ensure server is running on ${host}:${port}`);
     }
 
-    private makeReleaseFn(key: string): () => void {
+    /**
+     * Creates a release function to decrement reference count and kill the server if it reaches zero.
+     * Concurrent calls with cleanupExit are safe due to proc identity check.
+     */
+    private makeReleaseFn(key: string, proc: ChildProcess): () => void {
         return () => {
             const entry = this.servers.get(key);
             if (!entry) return;
+            // Only proceed if it's the same process instance
+            if (entry.proc !== proc) return;
+
             entry.refCount--;
             if (entry.refCount <= 0) {
                 entry.proc.kill();

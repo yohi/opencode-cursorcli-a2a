@@ -7,6 +7,7 @@
 
 import express from 'express';
 import cors from 'cors';
+import crypto from 'node:crypto';
 import { executeCursorAgentStream } from './cursor-agent-service.js';
 import { logger } from '../utils/logger.js';
 
@@ -32,11 +33,26 @@ const authMiddleware = (req: express.Request, res: express.Response, next: expre
     if (!AUTH_TOKEN) return next();
     
     const authHeader = req.headers.authorization;
-    if (authHeader === `Bearer ${AUTH_TOKEN}`) {
-        next();
-    } else {
-        res.status(401).json({ error: 'Unauthorized' });
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+        return res.status(401).json({ error: 'Unauthorized' });
     }
+
+    const providedToken = authHeader.substring(7); // "Bearer " is length 7
+    
+    // Timing-safe comparison
+    try {
+        const expectedBuffer = Buffer.from(AUTH_TOKEN, 'utf8');
+        const providedBuffer = Buffer.from(providedToken, 'utf8');
+
+        if (expectedBuffer.length === providedBuffer.length && 
+            crypto.timingSafeEqual(expectedBuffer, providedBuffer)) {
+            return next();
+        }
+    } catch {
+        // Fallback or error in buffer conversion
+    }
+
+    res.status(401).json({ error: 'Unauthorized' });
 };
 
 // Health check
@@ -95,9 +111,12 @@ app.post('/:projectId/messages', authMiddleware, async (req: express.Request, re
     } else {
         // Synchronous mode (simplified)
         let responseText = '';
+        const controller = new AbortController();
+        const cleanup = () => controller.abort();
+        req.on('close', cleanup);
 
         try {
-            await executeCursorAgentStream(message, { workspace, sessionId, model }, (event) => {
+            await executeCursorAgentStream(message, { workspace, sessionId, model, signal: controller.signal }, (event) => {
                 if (event.type === 'message' && event.content) {
                     responseText += event.content;
                 }
@@ -109,8 +128,15 @@ app.post('/:projectId/messages', authMiddleware, async (req: express.Request, re
             });
             return;
         } catch (error) {
+            if (controller.signal.aborted) {
+                // If the request was already ended/closed, res.status/json might fail
+                if (!res.writableEnded) res.end();
+                return;
+            }
             res.status(500).json({ error: String(error) });
             return;
+        } finally {
+            req.removeListener('close', cleanup);
         }
     }
 });
