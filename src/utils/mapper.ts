@@ -1,6 +1,9 @@
 // src/utils/mapper.ts
 // cursor-agent-a2a (https://github.com/jeffkit/cursor-agent-a2a) REST API 向けマッパー
+import crypto from 'node:crypto';
 import type {
+    // AI SDK V2 types are aliased to V1 names for internal compatibility during migration.
+    // This allows the provider to work with newer SDK versions while maintaining stable internal interfaces.
     LanguageModelV2Prompt as LanguageModelV1Prompt,
     LanguageModelV2FinishReason as LanguageModelV1FinishReason,
     LanguageModelV2StreamPart as LanguageModelV1StreamPart,
@@ -69,8 +72,10 @@ export function mapPromptToCursorRequest(
 
     // コンテキスト構築
     const context: Record<string, string> = {};
-    const workspace = options?.workspace ?? process.cwd();
-    if (workspace) context['workspace'] = workspace;
+    const workspace = options?.workspace || process.cwd();
+    if (typeof workspace === 'string' && workspace.length > 0) {
+        context['workspace'] = workspace;
+    }
 
     // モデル決定: cursorModel > modelId(モデル名一致) > 省略
     let model: string | undefined = options?.cursorModel;
@@ -97,6 +102,21 @@ function resolveCursorModelFromId(modelId: string): string | undefined {
     return candidate;
 }
 
+interface FilePart {
+    type: 'file';
+    mediaType: string;
+    data: any; // Use any to bypass complex union type checks in a2a-client
+    filename?: string;
+}
+
+interface ToolCallPart {
+    type: 'tool-call';
+    toolCallId: string;
+    toolName: string;
+    input: any;
+    args?: any; // For backward compatibility if any V1 parts sneak in
+}
+
 /** AI SDK プロンプト配列を単一テキストに変換 */
 function buildMessageText(prompt: LanguageModelV1Prompt, options?: MapPromptOptions): string {
     const parts: string[] = [];
@@ -116,11 +136,13 @@ function buildMessageText(prompt: LanguageModelV1Prompt, options?: MapPromptOpti
             if (textParts.length > 0) parts.push(textParts.join('\n'));
 
             const fileParts = userParts.filter(
-                (p): p is any =>
-                    (p as { type: string }).type === 'file',
+                (p): p is FilePart => (p as any).type === 'file',
             );
             for (const f of fileParts) {
-                parts.push(`[FILE: ${f.mimeType || f.mediaType}]\n${typeof f.data === 'string' ? f.data : f.data.toString()}`);
+                const data = typeof f.data === 'string' 
+                    ? f.data 
+                    : (Buffer.isBuffer(f.data) ? f.data.toString() : new TextDecoder().decode(f.data));
+                parts.push(`[FILE: ${f.mediaType || 'unknown'}]\n${data}`);
             }
         } else if (msg.role === 'assistant') {
             const rawContent = msg.content;
@@ -132,11 +154,10 @@ function buildMessageText(prompt: LanguageModelV1Prompt, options?: MapPromptOpti
             if (textParts.length > 0) parts.push(`[Assistant]\n${textParts.join('\n')}`);
 
             const toolCalls = assistantContent.filter(
-                (p): p is any =>
-                    (p as { type: string }).type === 'tool-call',
+                (p): p is ToolCallPart => (p as any).type === 'tool-call',
             );
             for (const tc of toolCalls) {
-                parts.push(`[Tool Call: ${tc.toolName}]\n${JSON.stringify(tc.args || tc.input, null, 2)}`);
+                parts.push(`[Tool Call: ${tc.toolName}]\n${JSON.stringify(tc.input || tc.args, null, 2)}`);
             }
         } else if (msg.role === 'tool') {
             for (const result of msg.content) {
@@ -196,6 +217,7 @@ export class CursorA2AStreamMapper {
     private _lastFinishReason: LanguageModelV1FinishReason = 'unknown';
     private _promptTokens = 0;
     private _completionTokens = 0;
+    private _textId = `text-${crypto.randomUUID().slice(0, 8)}`;
 
     constructor(opts?: A2AStreamMapperOptions) {
         this.toolMapping = opts?.toolMapping ?? {};
@@ -209,6 +231,9 @@ export class CursorA2AStreamMapper {
     startNewTurn(): void {
         this._textAccum = '';
         this._toolCallBuffer.clear();
+        this._promptTokens = 0;
+        this._completionTokens = 0;
+        this._textId = `text-${crypto.randomUUID().slice(0, 8)}`;
     }
 
     /**
@@ -216,86 +241,39 @@ export class CursorA2AStreamMapper {
      */
     mapEvent(event: CursorAgentStreamEvent): MappedPart[] {
         const parts: MappedPart[] = [];
-        const typeStr = event.type as string;
 
-        switch (typeStr) {
+        switch (event.type) {
             case 'text':
             case 'message': {
-                const newText = String((event as any).content ?? '');
+                const newText = event.content;
                 let delta = '';
 
                 if (newText === this._textAccum) {
-                    // Exact match (e.g. final result echoing full sequence), ignore.
                     delta = '';
                 } else if (newText.startsWith(this._textAccum)) {
-                    // Cumulative snapshot
                     delta = newText.slice(this._textAccum.length);
                     this._textAccum = newText;
-                } else if (this._textAccum.startsWith(newText) || this._textAccum.includes(newText)) {
-                    // Substring received (maybe an out of order chunk or duplicate chunk), ignore.
+                } else if (this._textAccum.startsWith(newText) || this._textAccum.endsWith(newText)) {
+                    // Substring/duplicate chunk at start or end, ignore.
                     delta = '';
                 } else {
-                    // Entirely new chunk sequence (e.g. consecutive array blocks)
                     delta = newText;
                     this._textAccum += newText;
                 }
 
                 if (delta) {
-                    parts.push({ type: 'text-delta', textDelta: delta, delta } as any);
-                }
-                break;
-            }
-
-            case 'thinking':
-            case 'reasoning': {
-                if ((event as any).subtype === 'delta' && (event as any).text) {
-                    parts.push({ type: 'reasoning', textDelta: String((event as any).text) } as any);
-                }
-                break;
-            }
-
-            case 'tool_call': {
-                const rawName = String((event as any).name ?? 'unknown');
-                const mappedName = this.toolMapping[rawName] ?? rawName;
-                const callId = String((event as any).callId ?? `call-${rawName}-${Date.now()}`);
-                const isInternal = this.internalTools.has(mappedName) || this.internalTools.has(rawName);
-                const isClientKnown = !this.clientTools || this.clientTools.has(mappedName) || this.clientTools.has(rawName);
-
-                if (rawName === 'invalid' || (!isInternal && !isClientKnown)) {
-                    // invalid / 未知のツール → run_terminal_command に変換して doom_loop 防止
-                    const safeArgs = JSON.stringify({ command: `echo "[intercepted invalid tool: ${rawName}]"` });
                     parts.push({
-                        type: 'tool-call',
-                        toolCallType: 'function',
-                        toolCallId: callId,
-                        toolName: 'run_terminal_command',
-                        args: safeArgs,
-                    } as unknown as LanguageModelV1StreamPart);
-                } else {
-                    const argsObj = ((event as any).arguments ?? {}) as Record<string, unknown>;
-                    const argsStr = JSON.stringify(argsObj);
-                    this._toolCallBuffer.set(callId, { name: mappedName, args: argsObj });
-                    parts.push({
-                        type: 'tool-call',
-                        toolCallType: 'function',
-                        toolCallId: callId,
-                        toolName: mappedName,
-                        args: argsStr,
-                    } as unknown as LanguageModelV1StreamPart);
+                        type: 'text-delta',
+                        id: this._textId,
+                        delta,
+                    } as LanguageModelV1StreamPart);
                 }
                 break;
             }
 
-            case 'tool_result': {
-                // ツール結果はストリームパーツとして emit しない（内部で使用）
-                break;
-            }
-
-            case 'result':
-            case 'done':
             case 'complete': {
-                if ((event as any).sessionId) this._sessionId = (event as any).sessionId;
-                const metadata = ((event as any).metadata ?? {}) as Record<string, unknown>;
+                if (event.sessionId) this._sessionId = event.sessionId;
+                const metadata = (event.metadata ?? {}) as Record<string, unknown>;
                 this._promptTokens = (metadata['promptTokens'] as number | undefined) ?? this._promptTokens;
                 this._completionTokens = (metadata['completionTokens'] as number | undefined) ?? this._completionTokens;
                 this._lastFinishReason = 'stop';
@@ -311,16 +289,43 @@ export class CursorA2AStreamMapper {
                 break;
             }
 
+            case 'tool_call': {
+                const rawName = event.name;
+                const mappedName = this.toolMapping[rawName] ?? rawName;
+                const callId = event.callId ?? `call-${rawName}-${crypto.randomUUID()}`;
+                const isInternal = this.internalTools.has(mappedName) || this.internalTools.has(rawName);
+                const isClientKnown = !this.clientTools || this.clientTools.has(mappedName) || this.clientTools.has(rawName);
+
+                if (rawName === 'invalid' || (!isInternal && !isClientKnown)) {
+                    const safeArgs = JSON.stringify({ message: `[intercepted invalid tool: ${rawName}]` });
+                    parts.push({
+                        type: 'tool-call',
+                        toolCallId: callId,
+                        toolName: 'run_terminal_command',
+                        input: safeArgs,
+                    } as LanguageModelV1StreamPart);
+                } else {
+                    const argsObj = (event.arguments ?? {}) as Record<string, unknown>;
+                    const argsStr = JSON.stringify(argsObj);
+                    this._toolCallBuffer.set(callId, { name: mappedName, args: argsObj });
+                    parts.push({
+                        type: 'tool-call',
+                        toolCallId: callId,
+                        toolName: mappedName,
+                        input: argsStr,
+                    } as LanguageModelV1StreamPart);
+                }
+                break;
+            }
+
             case 'error': {
-                // エラーはスローして caller が処理
-                const errEvent = event as Record<string, any>;
-                const errorMessage = errEvent.error || errEvent.content || errEvent.message || 'unknown';
-                const errorCode = errEvent.code || 'unknown';
+                const errorMessage = event.message || 'unknown';
+                const errorCode = event.code || 'unknown';
                 throw new Error(`cursor-agent-a2a error: ${String(errorMessage)} (code: ${errorCode})`);
             }
 
             default:
-                // 未知のイベントタイプは無視
+                // Handle other events if necessary, currently ignoring passthrough types
                 break;
         }
 
@@ -414,7 +419,7 @@ export class A2AStreamMapper {
                                 name: String(req['name'] ?? 'unknown'),
                                 arguments: (req['arguments'] ?? req['params'] ?? {}) as Record<string, unknown>,
                                 callId: req['callId'] as string | undefined,
-                            };
+                            } as any;
                             parts.push(...this.inner.mapEvent(fakeToolEvent));
                         }
                     }
@@ -423,7 +428,7 @@ export class A2AStreamMapper {
 
             const isFinal = result.final === true;
             const state = result.status?.state;
-            if (isFinal || state === 'completed' || state === 'stop' || state === 'error') {
+            if ((isFinal || state === 'completed' || state === 'stop' || state === 'error') && state !== 'input-required') {
                 const finishReason: LanguageModelV1FinishReason =
                     state === 'error' ? 'error' : 'stop';
                 this.lastFinishReason = finishReason;
@@ -431,7 +436,7 @@ export class A2AStreamMapper {
                 parts.push({
                     type: 'finish',
                     finishReason,
-                    inputRequired: state === 'input-required',
+                    inputRequired: false,
                     rawState: state,
                     coderAgentKind: (result.metadata as Record<string, unknown> | undefined)?.['coderAgent'] as string | undefined,
                     usage: {

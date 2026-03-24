@@ -42,10 +42,21 @@ export class A2AClient {
 
     constructor(config: A2AConfig) {
         this.config = config;
-        this.baseUrl = `${config.protocol ?? 'http'}://${config.host}:${config.port}`;
+        const hostPart = (config.host.includes(':') && !config.host.startsWith('[')) 
+            ? `[${config.host}]` 
+            : config.host;
+        this.baseUrl = `${config.protocol ?? 'http'}://${hostPart}:${config.port}`;
     }
 
-    private getToken(): string {
+    private isSecureEndpoint(): boolean {
+        const isSecure = this.baseUrl.startsWith('https://');
+        const normalizedHost = this.config.host.replace(/^\[|\]$/g, '');
+        // 0.0.0.0 is excluded for security reasons
+        const isLocalhost = normalizedHost === '127.0.0.1' || normalizedHost === 'localhost' || normalizedHost === '::1';
+        return isSecure || isLocalhost;
+    }
+
+    private getToken(): string | undefined {
         if (this.resolvedToken) return this.resolvedToken;
         
         if (this.config.token) {
@@ -65,8 +76,8 @@ export class A2AClient {
             if (fs.existsSync(configPath)) {
                 const configContent = fs.readFileSync(configPath, 'utf8');
                 const config = JSON.parse(configContent);
-                if (config.apiKey) {
-                    this.resolvedToken = config.apiKey as string;
+                if (typeof config.apiKey === 'string') {
+                    this.resolvedToken = config.apiKey;
                     return this.resolvedToken;
                 }
             }
@@ -74,16 +85,16 @@ export class A2AClient {
             Logger.warn('[A2AClient] Failed to read cursor-agent-a2a config.json', e);
         }
 
-        // 3. フォールバック
-        this.resolvedToken = 'cursor-agent-demo-key';
-        return this.resolvedToken;
+        // 3. フォールバックなし (Security gate を正しく機能させるため)
+        return undefined;
     }
 
     /** `/projects` エンドポイントを使用して projectId を取得または作成する */
     private async resolveProjectId(workspace: string = process.cwd()): Promise<string> {
         const token = this.getToken();
         const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-        if (token) {
+        
+        if (token && this.isSecureEndpoint()) {
             headers['Authorization'] = `Bearer ${token}`;
         }
 
@@ -105,7 +116,9 @@ export class A2AClient {
             });
             return createRes.id;
         } catch (error) {
-            Logger.warn('[A2AClient] Failed to resolve or create project ID. Falling back to "default":', error);
+            Logger.warn('[A2AClient] Failed to resolve or create project ID. Falling back to "default":', {
+                message: error instanceof Error ? error.message : String(error)
+            });
             // サーバー起動直後や DB アクセスエラーなどの場合のフォールバック（動作しない可能性が高いが念のため）
             return 'default';
         }
@@ -114,7 +127,20 @@ export class A2AClient {
     /** `/:projectId/messages?stream=true` エンドポイントにストリーミングリクエストを送信する */
     async chatStream({ request, idempotencyKey, abortSignal, traceId, workspace }: ChatStreamOptions): Promise<ChatStreamResponse> {
         const finalTraceId = traceId || crypto.randomUUID();
-        const projectId = await this.resolveProjectId(workspace);
+        const token = this.getToken();
+        const isSecure = this.isSecureEndpoint();
+
+        if (token && !isSecure) {
+            throw new APICallError({
+                message: 'A2AClient: Token cannot be sent over an insecure non-localhost connection.',
+                url: `${this.baseUrl}/(projectId)/messages?stream=true`,
+                requestBodyValues: request,
+                isRetryable: false,
+            });
+        }
+
+        const effectiveWorkspace = request.context?.workspace || workspace || process.cwd();
+        const projectId = await this.resolveProjectId(effectiveWorkspace);
         const url = `${this.baseUrl}/${projectId}/messages?stream=true`;
 
         const headers: Record<string, string> = {
@@ -127,26 +153,19 @@ export class A2AClient {
             headers['Idempotency-Key'] = idempotencyKey;
         }
 
-        const token = this.getToken();
-        if (token) {
-            const isSecure = this.baseUrl.startsWith('https://');
-            const normalizedHost = this.config.host.replace(/^\[|\]$/g, '');
-            const isLocalhost = normalizedHost === '127.0.0.1' || normalizedHost === 'localhost' || normalizedHost === '::1' || normalizedHost === '0.0.0.0';
-            if (isSecure || isLocalhost) {
-                headers['Authorization'] = `Bearer ${token}`;
-            } else {
-                throw new APICallError({
-                    message: 'A2AClient: Token cannot be sent over an insecure non-localhost connection.',
-                    url,
-                    requestBodyValues: request,
-                    isRetryable: false,
-                });
-            }
+        if (token && isSecure) {
+            headers['Authorization'] = `Bearer ${token}`;
         }
 
         const retryCount = idempotencyKey ? 3 : 0;
 
-        const redactedRequest = { ...request, model: request.model ?? '(default)' };
+        const redactedRequest = {
+            model: request.model ?? '(default)',
+            traceId: finalTraceId,
+            workspace: effectiveWorkspace,
+            messageLength: request.message.length,
+            selectedCodeLength: request.context?.selectedCode?.length ?? 0
+        };
         Logger.debug(`POST ${url}`, JSON.stringify(redactedRequest));
 
         try {
@@ -187,10 +206,14 @@ export class A2AClient {
 
             let statusCode: number | undefined;
             let responseBody: string | undefined;
+            let errorCode: string | undefined;
 
             if (error instanceof FetchError) {
                 statusCode = error.response?.status;
+                errorCode = (error as any).code;
                 try { responseBody = await error.response?.text(); } catch { /**/ }
+            } else if (error instanceof Error) {
+                errorCode = (error as any).code;
             }
 
             const errMsg = error instanceof Error ? error.message : String(error);
@@ -203,6 +226,10 @@ export class A2AClient {
                 );
             }
 
+            const isTransient = statusCode 
+                ? RETRY_STATUS_CODES.includes(statusCode)
+                : (errorCode ? ['ETIMEDOUT', 'EAI_AGAIN', 'ECONNRESET'].includes(errorCode) : false);
+
             throw new APICallError({
                 message: errMsg,
                 url,
@@ -210,7 +237,7 @@ export class A2AClient {
                 statusCode,
                 responseBody,
                 cause: error,
-                isRetryable: statusCode ? RETRY_STATUS_CODES.includes(statusCode) : true,
+                isRetryable: isTransient,
             });
         }
     }

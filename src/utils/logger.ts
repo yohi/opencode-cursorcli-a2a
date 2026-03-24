@@ -12,25 +12,75 @@ function shouldLog(level: LogLevel): boolean {
     return false;
 }
 
-function formatMessage(level: LogLevel, message: string, ...args: unknown[]): string {
-    const ts = new Date().toISOString();
-    const extra = args.length > 0 ? ' ' + args.map(a =>
-        a instanceof Error ? `${a.message}${a.stack ? '\n' + a.stack : ''}` : JSON.stringify(a)
-    ).join(' ') : '';
-    return `${ts} ${LOG_PREFIX} [${level.toUpperCase()}] ${message}${extra}`;
+function safeStringify(value: any): string {
+    const seen = new WeakSet();
+    try {
+        return JSON.stringify(value, (_key, val) => {
+            if (typeof val === 'bigint') return val.toString();
+            if (val instanceof Error) {
+                const { message, name, stack, ...rest } = val;
+                return { message, name, stack, ...rest };
+            }
+            if (typeof val === 'object' && val !== null) {
+                if (seen.has(val)) return '[Circular]';
+                seen.add(val);
+            }
+            return val;
+        });
+    } catch {
+        try {
+            return String(value);
+        } catch {
+            return '[Unserializable]';
+        }
+    }
 }
 
-export const Logger = {
-    debug(message: string, ...args: unknown[]): void {
-        if (shouldLog('debug')) console.debug(formatMessage('debug', message, ...args));
+function extractContext(...args: any[]): Record<string, any> {
+    if (args.length === 0) return {};
+    if (args.length === 1) {
+        const arg = args[0];
+        if (arg instanceof Error) {
+            return { error: arg };
+        }
+        if (typeof arg === 'object' && arg !== null && !Array.isArray(arg)) {
+            const proto = Object.getPrototypeOf(arg);
+            if (proto === Object.prototype || proto === null) {
+                return arg;
+            }
+        }
+    }
+    return { args };
+}
+
+export const logger = {
+    debug: (msg: string, ...args: any[]) => {
+        if (!shouldLog('debug')) return;
+        const context = extractContext(...args);
+        console.debug(safeStringify({ ...context, level: 'debug', prefix: LOG_PREFIX, message: msg, timestamp: new Date().toISOString() }));
     },
-    info(message: string, ...args: unknown[]): void {
-        if (shouldLog('info')) console.info(formatMessage('info', message, ...args));
+    info: (msg: string, ...args: any[]) => {
+        if (!shouldLog('info')) return;
+        const context = extractContext(...args);
+        console.info(safeStringify({ ...context, level: 'info', prefix: LOG_PREFIX, message: msg, timestamp: new Date().toISOString() }));
     },
-    warn(message: string, ...args: unknown[]): void {
-        if (shouldLog('warn')) console.warn(formatMessage('warn', message, ...args));
+    warn: (msg: string, ...args: any[]) => {
+        if (!shouldLog('warn')) return;
+        const context = extractContext(...args);
+        console.warn(safeStringify({ ...context, level: 'warn', prefix: LOG_PREFIX, message: msg, timestamp: new Date().toISOString() }));
     },
-    error(message: string, ...args: unknown[]): void {
-        if (shouldLog('error')) console.error(formatMessage('error', message, ...args));
+    error: (msg: string, ...args: any[]) => {
+        if (!shouldLog('error')) return;
+        const context = extractContext(...args);
+        console.error(safeStringify({ ...context, level: 'error', prefix: LOG_PREFIX, message: msg, timestamp: new Date().toISOString() }));
     },
+    child: (baseContext: Record<string, any>) => ({
+        debug: (msg: string, ...args: any[]) => logger.debug(msg, { ...baseContext, ...extractContext(...args) }),
+        info: (msg: string, ...args: any[]) => logger.info(msg, { ...baseContext, ...extractContext(...args) }),
+        warn: (msg: string, ...args: any[]) => logger.warn(msg, { ...baseContext, ...extractContext(...args) }),
+        error: (msg: string, ...args: any[]) => logger.error(msg, { ...baseContext, ...extractContext(...args) }),
+    })
 };
+
+// a2a-client.ts などのために Logger (大文字) もエクスポート
+export const Logger = logger;

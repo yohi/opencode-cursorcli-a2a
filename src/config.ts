@@ -2,10 +2,10 @@
 import { z } from 'zod';
 import { ConfigSchema, type A2AConfig, type AgentEndpoint, AgentEndpointSchema } from './schemas.js';
 import type { SessionStore } from './session.js';
-import type { FallbackConfig } from './fallback.js';
+
 import { readFileSync, watch, existsSync } from 'node:fs';
 import path from 'node:path';
-import { Logger } from './utils/logger.js';
+import { logger as Logger } from './utils/logger.js';
 
 // ---------------------------------------------------------------------------
 // CursorCLI 固有のコンテキスト設定
@@ -38,6 +38,18 @@ export interface AgentTriggerConfig {
     keywords?: string[];
     /** このエージェントに送る際のカスタムシステムプロンプト追加文 */
     systemPromptAddendum?: string;
+}
+
+// ---------------------------------------------------------------------------
+// エラー時フォールバック設定
+// ---------------------------------------------------------------------------
+export interface FallbackConfig {
+    /** サーバーエラー時にローカル LLM または別のプロバイダーにフォールバックするか */
+    enabled?: boolean;
+    /** フォールバック先として検討するモデル ID リスト */
+    models?: string[];
+    /** 最大試行回数 */
+    maxRetries?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -143,8 +155,9 @@ export class ConfigManager {
     private configPath: string = path.resolve(process.cwd(), 'cursor-a2a-config.json');
     private watchers: Set<() => void> = new Set();
     private isWatching: boolean = false;
-    private configWatcher: import('node:fs').FSWatcher | null = null;
+    private configWatcher: any = null;
     private _changeTimer: NodeJS.Timeout | null = null;
+    private _reWatchTimer: NodeJS.Timeout | null = null;
 
     private constructor() {
         this.load();
@@ -167,11 +180,13 @@ export class ConfigManager {
     }
 
     public getExternalConfig() {
-        return this.externalConfig;
+        return structuredClone(this.externalConfig);
     }
-
     public load(): void {
-        if (!existsSync(this.configPath)) return;
+        if (!existsSync(this.configPath)) {
+            this.externalConfig = {};
+            return;
+        }
         try {
             const content = readFileSync(this.configPath, 'utf8');
             const parsed = JSON.parse(content);
@@ -179,25 +194,61 @@ export class ConfigManager {
             this.externalConfig = validated;
             Logger.info(`[ConfigManager] Loaded config from ${this.configPath}`);
         } catch (err) {
+            this.externalConfig = {};
             Logger.error(`[ConfigManager] Failed to load config from ${this.configPath}:`, err);
         }
     }
 
     public watch(enable: boolean): void {
-        if (!enable || this.isWatching || !existsSync(this.configPath)) return;
+        if (!enable) {
+            this.stopWatch();
+            return;
+        }
+        if (this.isWatching || !existsSync(this.configPath)) return;
         this.isWatching = true;
         try {
             this.configWatcher = watch(this.configPath, (event) => {
                 if (event === 'change' || event === 'rename') {
                     if (this._changeTimer) clearTimeout(this._changeTimer);
+                    
                     this._changeTimer = setTimeout(() => {
                         Logger.info(`[ConfigManager] Config file ${event}, reloading...`);
-                        this.load();
-                        if (event === 'rename' && existsSync(this.configPath)) {
-                            this.stopWatch();
-                            this.watch(true);
+                        
+                        let loadSuccess = false;
+                        try {
+                            // Check if file exists now (fresh check after debounce)
+                            if (existsSync(this.configPath)) {
+                                this.load();
+                                loadSuccess = true;
+                            }
+                        } catch (err) {
+                            Logger.error(`[ConfigManager] Error during config reload:`, err);
                         }
-                        for (const cb of this.watchers) cb();
+
+                        if (event === 'rename') {
+                            if (existsSync(this.configPath)) {
+                                // Atomic move or re-creation occurred. 
+                                // Reset the watcher to handle the new inode.
+                                this.stopWatch();
+                                if (this._reWatchTimer) clearTimeout(this._reWatchTimer);
+                                this._reWatchTimer = setTimeout(() => {
+                                    this._reWatchTimer = null;
+                                    this.watch(true);
+                                }, 100);
+                            } else {
+                                this.stopWatch();
+                            }
+                        }
+                        
+                        if (loadSuccess) {
+                            for (const cb of this.watchers) {
+                                try {
+                                    cb();
+                                } catch (cbErr) {
+                                    Logger.error(`[ConfigManager] Error in config watcher callback:`, cbErr);
+                                }
+                            }
+                        }
                     }, 300);
                 }
             });
@@ -209,20 +260,22 @@ export class ConfigManager {
 
     public stopWatch(): void {
         if (this._changeTimer) { clearTimeout(this._changeTimer); this._changeTimer = null; }
+        if (this._reWatchTimer) { clearTimeout(this._reWatchTimer); this._reWatchTimer = null; }
         if (this.configWatcher) { this.configWatcher.close(); this.configWatcher = null; }
         this.isWatching = false;
     }
 
     public dispose(): void {
         this.stopWatch();
+        if (this._changeTimer) { clearTimeout(this._changeTimer); this._changeTimer = null; }
+        if (this._reWatchTimer) { clearTimeout(this._reWatchTimer); this._reWatchTimer = null; }
         this.watchers.clear();
         if (ConfigManager.instance === this) {
             ConfigManager.instance = undefined;
         }
     }
 
-    /** テスト用: インスタンスをリセット */
-    static _reset(): void {
+    static disposeIfExists(): void {
         ConfigManager.instance?.dispose();
         ConfigManager.instance = undefined;
     }
@@ -236,11 +289,11 @@ export class ConfigManager {
 // ---------------------------------------------------------------------------
 // ユーティリティ: 空文字・"null"・"undefined" 文字列を undefined 化
 // ---------------------------------------------------------------------------
-function getNormalizedValue<T>(val: T): T | undefined {
-    if (typeof val !== 'string') return (val === null ? undefined : val) as T | undefined;
-    const trimmed = (val as string).trim();
-    if (trimmed === '' || trimmed === 'undefined' || trimmed === 'null') return undefined;
-    return trimmed as unknown as T;
+function getNormalizedValue(val: string | null | undefined): string | undefined {
+if (typeof val !== 'string') return undefined;
+const trimmed = val.trim();
+if (trimmed === '' || trimmed === 'undefined' || trimmed === 'null') return undefined;
+return trimmed;
 }
 
 const parseSchema = z.object({
@@ -291,7 +344,8 @@ export function resolveConfig(options?: OpenCodeProviderOptions): A2AConfig & {
     const external = manager.getExternalConfig() as z.infer<typeof ExternalConfigSchema>;
 
     const envHost = getNormalizedValue(process.env['CURSOR_A2A_HOST']);
-    const envPort = getNormalizedValue(process.env['CURSOR_A2A_PORT'] ?? process.env['PORT']);
+    const envPortRaw = getNormalizedValue(process.env['CURSOR_A2A_PORT'] ?? process.env['PORT']);
+    const envPort = envPortRaw ? Number(envPortRaw) : undefined;
     // cursor-agent-a2a の認証トークン (CURSOR_AGENT_API_KEY が正式)
     const envToken = getNormalizedValue(
         process.env['CURSOR_AGENT_API_KEY'] ?? process.env['CURSOR_A2A_TOKEN']
@@ -301,10 +355,10 @@ export function resolveConfig(options?: OpenCodeProviderOptions): A2AConfig & {
     const envWorkspace = getNormalizedValue(process.env['CURSOR_A2A_WORKSPACE']);
 
     const mergedConfig = {
-        host: getNormalizedValue(options?.host) ?? external.host ?? envHost,
-        port: getNormalizedValue(options?.port) ?? external.port ?? (envPort ? Number(envPort) : undefined),
-        token: getNormalizedValue(options?.token) ?? external.token ?? envToken,
-        protocol: getNormalizedValue(options?.protocol) ?? external.protocol ?? (envProtocol as 'http' | 'https' | undefined),
+        host: getNormalizedValue(options?.host) ?? getNormalizedValue(external.host) ?? envHost,
+        port: options?.port ?? external.port ?? envPort,
+        token: getNormalizedValue(options?.token) ?? getNormalizedValue(external.token) ?? envToken,
+        protocol: (getNormalizedValue(options?.protocol) ?? getNormalizedValue(external.protocol) ?? envProtocol) as 'http' | 'https' | undefined,
         generationConfig: options?.generationConfig,
     };
 
@@ -323,7 +377,7 @@ export function resolveConfig(options?: OpenCodeProviderOptions): A2AConfig & {
         agents: options?.agents ?? external.agents,
         triggerConfig: options?.triggerConfig ?? external.triggerConfig,
         contextConfig: options?.contextConfig ?? external.contextConfig,
-        cursorModel: getNormalizedValue(options?.cursorModel) ?? external.cursorModel ?? envCursorModel,
-        workspace: getNormalizedValue(options?.workspace) ?? external.workspace ?? envWorkspace,
+        cursorModel: getNormalizedValue(options?.cursorModel) ?? getNormalizedValue(external.cursorModel) ?? envCursorModel,
+        workspace: getNormalizedValue(options?.workspace) ?? getNormalizedValue(external.workspace) ?? envWorkspace,
     };
 }
