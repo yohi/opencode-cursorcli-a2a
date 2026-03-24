@@ -143,8 +143,9 @@ export class ConfigManager {
     private configPath: string = path.resolve(process.cwd(), 'cursor-a2a-config.json');
     private watchers: Set<() => void> = new Set();
     private isWatching: boolean = false;
-    private configWatcher: import('node:fs').FSWatcher | null = null;
+    private configWatcher: any = null;
     private _changeTimer: NodeJS.Timeout | null = null;
+    private _reWatchTimer: NodeJS.Timeout | null = null;
 
     private constructor() {
         this.load();
@@ -167,9 +168,8 @@ export class ConfigManager {
     }
 
     public getExternalConfig() {
-        return this.externalConfig;
+        return structuredClone(this.externalConfig);
     }
-
     public load(): void {
         if (!existsSync(this.configPath)) {
             this.externalConfig = {};
@@ -216,10 +216,14 @@ export class ConfigManager {
                         }
 
                         if (event === 'rename') {
-                            if (loadSuccess && existsSync(this.configPath)) {
+                            this.load();
+                            if (existsSync(this.configPath)) {
                                 this.stopWatch();
-                                // wait slightly before re-watching to avoid loops
-                                setTimeout(() => this.watch(true), 50);
+                                if (this._reWatchTimer) clearTimeout(this._reWatchTimer);
+                                this._reWatchTimer = setTimeout(() => {
+                                    this._reWatchTimer = null;
+                                    this.watch(true);
+                                }, 50);
                             } else {
                                 this.stopWatch();
                             }
@@ -245,12 +249,15 @@ export class ConfigManager {
 
     public stopWatch(): void {
         if (this._changeTimer) { clearTimeout(this._changeTimer); this._changeTimer = null; }
+        if (this._reWatchTimer) { clearTimeout(this._reWatchTimer); this._reWatchTimer = null; }
         if (this.configWatcher) { this.configWatcher.close(); this.configWatcher = null; }
         this.isWatching = false;
     }
 
     public dispose(): void {
         this.stopWatch();
+        if (this._changeTimer) { clearTimeout(this._changeTimer); this._changeTimer = null; }
+        if (this._reWatchTimer) { clearTimeout(this._reWatchTimer); this._reWatchTimer = null; }
         this.watchers.clear();
         if (ConfigManager.instance === this) {
             ConfigManager.instance = undefined;

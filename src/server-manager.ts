@@ -5,7 +5,7 @@
  * Prioritizes the internal server over external libraries.
  */
 
-import { spawn, exec, type ChildProcess } from 'node:child_process';
+import { spawn, exec, execSync, type ChildProcess } from 'node:child_process';
 import { createConnection } from 'node:net';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -162,6 +162,8 @@ interface ManagedServer {
     port: number;
     host: string;
     refCount: number;
+    stopping?: boolean;
+    shell?: boolean;
 }
 
 /**
@@ -200,7 +202,7 @@ export class ServerManager {
 
         // 1. 既に管理されているか確認
         const existing = this.servers.get(key);
-        if (existing) {
+        if (existing && !existing.stopping) {
             existing.refCount++;
             logger.info(`Reusing managed CursorAgent server on ${key} (refCount=${existing.refCount})`);
             return this.makeReleaseFn(key, existing.proc);
@@ -247,11 +249,12 @@ export class ServerManager {
 
             logger.info(`Starting CursorAgent server: ${serverPath} (port=${port}, host=${host})`);
 
+            const shell = !isJs;
             const proc = spawn(cmd, args, {
                 env,
                 stdio: debug ? (isTs ? 'inherit' : ['ignore', 'pipe', 'pipe']) : 'ignore',
                 detached: false,
-                shell: process.platform === 'win32' || !isJs,
+                shell,
             });
 
             this.startingProcs.add(proc);
@@ -304,7 +307,7 @@ export class ServerManager {
 
             this.startingProcs.delete(proc);
             // 起動成功後に登録
-            const entry: ManagedServer = { proc, port, host, refCount: 0 }; 
+            const entry: ManagedServer = { proc, port, host, refCount: 0, shell }; 
             this.servers.set(key, entry);
             this.registerCleanup();
 
@@ -350,8 +353,12 @@ export class ServerManager {
             entry.refCount--;
             logger.info(`Released CursorAgent server on ${key} (refCount=${entry.refCount})`);
             if (entry.refCount <= 0) {
-                entry.proc.kill();
-                this.servers.delete(key);
+                entry.stopping = true;
+                if (process.platform === 'win32' && entry.shell) {
+                    try { execSync(`taskkill /PID ${entry.proc.pid} /T /F`); } catch { /**/ }
+                } else {
+                    try { entry.proc.kill(); } catch { /**/ }
+                }
             }
         };
     }
@@ -387,12 +394,20 @@ export class ServerManager {
 
     public dispose() {
         for (const [, entry] of this.servers) {
-            try { entry.proc.kill(); } catch { /**/ }
+            entry.stopping = true;
+            if (process.platform === 'win32' && entry.shell) {
+                try { execSync(`taskkill /PID ${entry.proc.pid} /T /F`); } catch { /**/ }
+            } else {
+                try { entry.proc.kill(); } catch { /**/ }
+            }
         }
-        this.servers.clear();
 
         for (const proc of this.startingProcs) {
-            try { proc.kill(); } catch { /**/ }
+            if (process.platform === 'win32') {
+                try { execSync(`taskkill /PID ${proc.pid} /T /F`); } catch { /**/ }
+            } else {
+                try { proc.kill(); } catch { /**/ }
+            }
         }
         this.startingProcs.clear();
 
