@@ -61,6 +61,10 @@ export interface CursorA2AProvider {
 export function createCursorA2AProvider(options?: OpenCodeProviderOptions): CursorA2AProvider {
     const providers = new Map<string, OpenCodeCursorA2AProvider>();
 
+    /**
+     * Creates or retrieves a language model instance.
+     * Providers are cached by modelId ONLY when default options are used (no modelOptions).
+     */
     function createModel(modelId: string, modelOptions?: OpenCodeProviderOptions): LanguageModelV1 {
         const cacheKey = modelId;
         const existing = providers.get(cacheKey);
@@ -81,7 +85,8 @@ export function createCursorA2AProvider(options?: OpenCodeProviderOptions): Curs
 
     // Support for simple generate/dispose interface if needed
     fn.generate = async (prompt: string, config: any = {}) => {
-        const model = createModel(options?.cursorModel || 'auto', config);
+        const modelId = options?.cursorModel && options.cursorModel !== '' ? options.cursorModel : 'auto';
+        const model = createModel(modelId, config);
         const result = await (model as any).doGenerate({
             inputFormat: 'prompt',
             mode: { type: 'regular' },

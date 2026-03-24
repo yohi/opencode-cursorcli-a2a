@@ -141,7 +141,21 @@ describe('CursorA2AStreamMapper', () => {
         const parts = mapper.mapEvent({ type: 'text', content: 'Hello World' });
         const deltas = parts.filter(p => p.type === 'text-delta');
         expect(deltas.length).toBeGreaterThan(0);
-        expect((deltas[0] as any).textDelta || (deltas[0] as any).delta).toBe('Hello World');
+        expect((deltas[0] as any).delta).toBe('Hello World');
+    });
+
+    it('extracts reasoning from reasoning/thinking events', () => {
+        const mapper = new CursorA2AStreamMapper();
+        mapper.startNewTurn();
+        const p1 = mapper.mapEvent({ type: 'reasoning', text: 'I am thinking...' });
+        expect(p1.length).toBe(1);
+        expect(p1[0].type).toBe('reasoning');
+        expect((p1[0] as any).text).toBe('I am thinking...');
+
+        const p2 = mapper.mapEvent({ type: 'thinking', text: 'Deep thoughts' });
+        expect(p2.length).toBe(1);
+        expect(p2[0].type).toBe('reasoning');
+        expect((p2[0] as any).text).toBe('Deep thoughts');
     });
 
     it('deduplicates text using snapshot diffing', () => {
@@ -150,7 +164,7 @@ describe('CursorA2AStreamMapper', () => {
         mapper.mapEvent({ type: 'text', content: 'Hello' });
         const parts = mapper.mapEvent({ type: 'text', content: 'Hello World' });
         const deltas = parts.filter(p => p.type === 'text-delta');
-        expect((deltas[0] as any).textDelta || (deltas[0] as any).delta).toBe(' World');
+        expect((deltas[0] as any).delta).toBe(' World');
     });
 
     it('emits finish on complete event', () => {

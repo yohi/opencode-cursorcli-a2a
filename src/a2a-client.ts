@@ -143,7 +143,7 @@ export class A2AClient {
         if (token && !isSecure) {
             throw new APICallError({
                 message: 'A2AClient: Token cannot be sent over an insecure non-localhost connection.',
-                url: `${this.baseUrl}/(projectId)/messages?stream=true`,
+                url: `${this.baseUrl}/:projectId/messages?stream=true`,
                 requestBodyValues: request,
                 isRetryable: false,
             });

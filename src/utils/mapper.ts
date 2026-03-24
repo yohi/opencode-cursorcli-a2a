@@ -274,6 +274,18 @@ export class CursorA2AStreamMapper {
                 break;
             }
 
+            case 'thinking':
+            case 'reasoning': {
+                const text = event.text;
+                if (text) {
+                    parts.push({
+                        type: 'reasoning',
+                        text,
+                    } as any);
+                }
+                break;
+            }
+
             case 'complete': {
                 if (event.sessionId) this._sessionId = event.sessionId;
                 const metadata = (event.metadata ?? {}) as Record<string, unknown>;

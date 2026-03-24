@@ -294,7 +294,7 @@ export class OpenCodeCursorA2AProvider {
                                         activeTextId = `text-${textPartCounter++}`;
                                         controller.enqueue({ type: 'text-start', id: activeTextId } as unknown as LanguageModelV1StreamPart);
                                     }
-                                    controller.enqueue({ type: 'text-delta', id: activeTextId, delta: p['textDelta'] } as unknown as LanguageModelV1StreamPart);
+                                    controller.enqueue({ type: 'text-delta', id: activeTextId, delta: p['delta'] } as unknown as LanguageModelV1StreamPart);
                                     break;
                                 }
                                 case 'reasoning': {
@@ -304,7 +304,7 @@ export class OpenCodeCursorA2AProvider {
                                     }
                                     const reasoningId = `reasoning-${reasoningPartCounter++}`;
                                     controller.enqueue({ type: 'reasoning-start', id: reasoningId } as unknown as LanguageModelV1StreamPart);
-                                    controller.enqueue({ type: 'reasoning-delta', id: reasoningId, delta: p['textDelta'] } as unknown as LanguageModelV1StreamPart);
+                                    controller.enqueue({ type: 'reasoning-delta', id: reasoningId, delta: p['text'] } as unknown as LanguageModelV1StreamPart);
                                     controller.enqueue({ type: 'reasoning-end', id: reasoningId } as unknown as LanguageModelV1StreamPart);
                                     break;
                                 }
@@ -315,7 +315,7 @@ export class OpenCodeCursorA2AProvider {
                                     }
                                     const toolId = p['toolCallId'] as string;
                                     controller.enqueue({ type: 'tool-input-start', id: toolId, toolCallId: toolId, toolName: p['toolName'] } as unknown as LanguageModelV1StreamPart);
-                                    controller.enqueue({ type: 'tool-input-delta', id: toolId, delta: p['args'] } as unknown as LanguageModelV1StreamPart);
+                                    controller.enqueue({ type: 'tool-input-delta', id: toolId, delta: p['input'] } as unknown as LanguageModelV1StreamPart);
                                     controller.enqueue({ type: 'tool-input-end', id: toolId } as unknown as LanguageModelV1StreamPart);
                                     controller.enqueue(part as LanguageModelV1StreamPart);
                                     break;
@@ -411,8 +411,8 @@ export class OpenCodeCursorA2AProvider {
                         reasoning += v['delta'] as string;
                         break;
                     case 'tool-call':
-                        toolCalls.push({ toolCallType: 'function', toolCallId: v['toolCallId'] as string, toolName: v['toolName'] as string, args: v['args'] as string });
-                        content.push({ type: 'tool-call', toolCallId: v['toolCallId'] as string, toolName: v['toolName'] as string, args: v['args'] as string });
+                        toolCalls.push({ toolCallType: 'function', toolCallId: v['toolCallId'] as string, toolName: v['toolName'] as string, args: v['input'] as string });
+                        content.push({ type: 'tool-call', toolCallId: v['toolCallId'] as string, toolName: v['toolName'] as string, args: v['input'] as string });
                         break;
                     case 'finish':
                         finishReason = v['finishReason'] as LanguageModelV1FinishReason;
