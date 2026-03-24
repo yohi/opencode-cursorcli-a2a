@@ -283,6 +283,7 @@ export class OpenCodeCursorA2AProvider {
         let textPartCounter = 0;
         let reasoningPartCounter = 0;
         const self = this;
+        const abortController = new AbortController();
 
         const stream = new ReadableStream<LanguageModelV1StreamPart>({
             start: async (controller) => {
@@ -293,7 +294,7 @@ export class OpenCodeCursorA2AProvider {
                     let finishedNormally = false;
 
                     Logger.info('[Provider] Starting to consume response stream');
-                    for await (const event of parseCursorA2AStream(responseStream)) {
+                    for await (const event of parseCursorA2AStream(responseStream, abortController.signal)) {
                         Logger.debug('[Provider] Received event', event.type);
                         const parts = mapper.mapEvent(event);
 
@@ -385,6 +386,7 @@ export class OpenCodeCursorA2AProvider {
             },
             cancel(reason) {
                 Logger.warn(`[Provider] AI SDK cancelled the generation stream! Reason:`, reason);
+                abortController.abort(reason);
                 try { responseStream.cancel(reason).catch(() => {}); } catch {}
             }
         });
