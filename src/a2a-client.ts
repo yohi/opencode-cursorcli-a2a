@@ -185,7 +185,6 @@ export class A2AClient {
                 headers,
                 body: request,
                 signal: abortSignal,
-                retryDelay: 1000,
                 // AI SDK はストリームを期待している
                 responseType: 'stream',
                 // ofetch のエラーハンドリングを無効化して自前で APICallError に包む

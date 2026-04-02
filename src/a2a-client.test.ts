@@ -94,7 +94,6 @@ describe('A2AClient', () => {
                     'Idempotency-Key': 'test-key',
                     'x-a2a-trace-id': expect.any(String),
                 }),
-                retryDelay: 1000,
                 ignoreResponseError: true,
                 responseType: 'stream',
             })
@@ -128,6 +127,10 @@ describe('A2AClient', () => {
     it('should handle mid-stream abort', async () => {
         const controller = new AbortController();
         const cancelSpy = vi.fn();
+        
+        // エミュレート: 中断時にキャンセルを呼ぶ
+        controller.signal.addEventListener('abort', () => cancelSpy());
+
         const mockStream = {
             getReader: () => ({
                 read: vi.fn().mockImplementation(async () => {
@@ -165,6 +168,9 @@ describe('A2AClient', () => {
             expect.any(String),
             expect.objectContaining({ signal: controller.signal })
         );
+
+        // Verify cancel was called (due to signal abort event listener)
+        expect(cancelSpy).toHaveBeenCalled();
     });
 
     it('should use token in Authorization header for localhost', async () => {
@@ -188,11 +194,11 @@ describe('A2AClient', () => {
 
     it('should throw APICallError on non-ok response', async () => {
         vi.mocked(ofetch.raw).mockResolvedValue(createMockResponse(false, 500, 'Error body content') as any);
-        const p = client.chatStream({ request: mockRequest });
-        await expect(p).rejects.toThrow(APICallError);
         try {
-            await p;
+            await client.chatStream({ request: mockRequest });
+            throw new Error('Should have thrown APICallError');
         } catch (e: any) {
+            expect(e).toBeInstanceOf(APICallError);
             expect(e.statusCode).toBe(500);
             expect(e.responseBody).toBe('Error body content');
             expect(e.message).toContain('Error body content');

@@ -37,19 +37,57 @@ async function makeRequest(app: express.Express, method: string, path: string, b
 
 describe('A2A Routes', () => {
     let app: express.Express;
+    let mockExecuteAgent: any;
 
     beforeEach(() => {
         app = express();
         app.use(express.json());
         const taskStore = new TaskStore();
+        mockExecuteAgent = vi.fn(async (_msg: string, opts: { workspace?: string; sessionId?: string; model?: string; signal?: AbortSignal }, onEvent: (event: CursorAgentEvent) => void) => {
+            onEvent({ type: 'message', content: 'Hello', timestamp: Date.now() });
+            // 入力された sessionId があればそれを返し、なければ新規発行する模擬的な挙動
+            return { sessionId: opts.sessionId || 'new-session-id' };
+        });
         const router = createA2ARouter({
             taskStore,
-            executeAgent: vi.fn(async (_msg: string, _opts: { workspace?: string; sessionId?: string; model?: string; signal?: AbortSignal }, onEvent: (event: CursorAgentEvent) => void) => {
-                onEvent({ type: 'message', content: 'Hello', timestamp: Date.now() });
-                return { sessionId: 'sess-1' };
-            }),
+            executeAgent: mockExecuteAgent,
         });
         app.use(router);
+    });
+
+    it('should reuse sessionId for the same contextId', async () => {
+        const contextId = 'test-context-123';
+        
+        // 1回目
+        await makeRequest(app, 'POST', '/message:send', {
+            message: {
+                role: 'ROLE_USER',
+                parts: [{ text: 'Hello 1' }],
+            },
+            metadata: { contextId }
+        });
+        
+        expect(mockExecuteAgent).toHaveBeenCalledWith(
+            expect.any(String),
+            expect.objectContaining({ sessionId: undefined }),
+            expect.any(Function)
+        );
+
+        // 2回目 (同じ contextId)
+        await makeRequest(app, 'POST', '/message:send', {
+            message: {
+                role: 'ROLE_USER',
+                parts: [{ text: 'Hello 2' }],
+            },
+            metadata: { contextId }
+        });
+
+        // 2回目は 1回目で返された 'new-session-id' が渡されているはず
+        expect(mockExecuteAgent).toHaveBeenLastCalledWith(
+            expect.any(String),
+            expect.objectContaining({ sessionId: 'new-session-id' }),
+            expect.any(Function)
+        );
     });
 
     it('GET /.well-known/agent-card.json should return a valid agent card', async () => {

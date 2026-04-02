@@ -68,7 +68,10 @@ export class TaskStore {
     get(taskId: string): A2ATask | undefined {
         const entry = this.tasks.get(taskId);
         if (!entry || Date.now() > entry.expiresAt) {
-            if (entry) this.tasks.delete(taskId);
+            if (entry) {
+                this.sessions.delete(entry.task.contextId);
+                this.tasks.delete(taskId);
+            }
             return undefined;
         }
         return structuredClone(entry.task);
@@ -112,6 +115,7 @@ export class TaskStore {
         const now = Date.now();
         for (const [id, entry] of this.tasks.entries()) {
             if (now > entry.expiresAt) {
+                this.sessions.delete(entry.task.contextId);
                 this.tasks.delete(id);
                 continue;
             }

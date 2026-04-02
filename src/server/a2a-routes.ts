@@ -55,7 +55,10 @@ export function createA2ARouter(options: A2ARouterOptions): Router {
             return;
         }
 
-        const contextId = `ctx-${crypto.randomUUID()}`;
+        const contextId =
+            (metadata?.['contextId'] as string) ||
+            (message.metadata?.['contextId'] as string) ||
+            `ctx-${crypto.randomUUID()}`;
         const task = taskStore.create(contextId, metadata);
         taskStore.updateStatus(task.id, 'TASK_STATE_WORKING');
 
@@ -90,7 +93,7 @@ export function createA2ARouter(options: A2ARouterOptions): Router {
             taskStore.updateStatus(task.id, 'TASK_STATE_COMPLETED');
         } catch (err) {
             if (controller.signal.aborted) {
-                taskStore.updateStatus(task.id, 'TASK_STATE_ABORTED');
+                taskStore.updateStatus(task.id, 'TASK_STATE_CANCELED');
                 return;
             }
             const errMsg = err instanceof Error ? err.message : String(err);
@@ -133,7 +136,10 @@ export function createA2ARouter(options: A2ARouterOptions): Router {
         res.setHeader('Connection', 'keep-alive');
         res.flushHeaders();
 
-        const contextId = `ctx-${crypto.randomUUID()}`;
+        const contextId =
+            (metadata?.['contextId'] as string) ||
+            (message.metadata?.['contextId'] as string) ||
+            `ctx-${crypto.randomUUID()}`;
         const task = taskStore.create(contextId, metadata);
         const model = (metadata?.['model'] as string) ?? undefined;
         const existingSessionId = taskStore.getSessionId(contextId);
@@ -147,7 +153,7 @@ export function createA2ARouter(options: A2ARouterOptions): Router {
         const cleanup = () => {
             if (!controller.signal.aborted) {
                 controller.abort();
-                taskStore.updateStatus(task.id, 'TASK_STATE_ABORTED');
+                taskStore.updateStatus(task.id, 'TASK_STATE_CANCELED');
                 if (!res.writableEnded) {
                     sendSSE(res, { task: taskStore.get(task.id)! });
                     res.end();
