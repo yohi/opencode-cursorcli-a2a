@@ -20,18 +20,18 @@ async function makeRequest(app: express.Express, method: string, path: string, b
                 .then(async (res) => {
                     const contentType = res.headers.get('content-type') || '';
                     const responseBody = contentType.includes('json') ? await res.json() : await res.text();
-                    server.close();
                     resolve({
                         status: res.status,
                         body: responseBody,
                         headers: Object.fromEntries(res.headers.entries()),
                     });
                 })
-                .catch((err) => {
+                .catch(reject)
+                .finally(() => {
                     server.close();
-                    reject(err);
                 });
         });
+        server.on('error', reject);
     });
 }
 
@@ -80,6 +80,21 @@ describe('A2A Routes', () => {
             message: { invalid: true },
         });
         expect(res.status).toBe(400);
+    });
+
+    it('POST /message:stream should return a valid SSE stream', async () => {
+        const res = await makeRequest(app, 'POST', '/message:stream', {
+            message: {
+                role: 'ROLE_USER',
+                parts: [{ text: 'Hello stream' }],
+                messageId: 'msg-stream-1',
+            },
+        });
+        expect(res.status).toBe(200);
+        expect(res.headers['content-type']).toContain('text/event-stream');
+        expect(res.body).toContain('data: {');
+        expect(res.body).toContain('TASK_STATE_WORKING');
+        expect(res.body).toContain('TASK_STATE_COMPLETED');
     });
 
     it('GET /tasks/:id should return a task', async () => {

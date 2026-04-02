@@ -277,7 +277,10 @@ export class OpenCodeCursorA2AProvider {
             responseStream = resp.stream;
             responseHeaders = resp.headers;
         } catch (error) {
-            await this.sessionStore.update(sessionId, { lastFinishReason: undefined });
+            await this.sessionStore.update(sessionId, { 
+                lastFinishReason: undefined,
+                processedMessagesCount: 0
+            });
             throw error;
         }
 

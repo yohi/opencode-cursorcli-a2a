@@ -95,7 +95,7 @@ export function mapPromptToCursorRequest(
             } else {
                 // アシスタントのメッセージのみが追加された場合は、エージェントへの追加入力は不要。
                 // ただし A2A プロトコル上、空だとエラーになる可能性があるため最小限の指示にする。
-                messageText = ""; // 下記の処理で (empty) になる
+                messageText = "(empty)";
             }
         }
     } else if (isContinuingSession) {

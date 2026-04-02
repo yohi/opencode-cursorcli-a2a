@@ -10,13 +10,14 @@ export interface AgentCardOptions {
 
 export function buildAgentCard(options: AgentCardOptions): A2AAgentCard {
     const { port, host, protocol = 'http', version = '1.0.0' } = options;
+    const normalizedHost = host.includes(':') && !host.startsWith('[') ? `[${host}]` : host;
     return {
         name: 'Cursor Agent (A2A)',
         description: 'AI-powered code assistant via Cursor CLI, exposed as an A2A-compliant agent',
         version,
         supportedInterfaces: [
             {
-                url: `${protocol}://${host}:${port}`,
+                url: `${protocol}://${normalizedHost}:${port}`,
                 protocolBinding: 'HTTP+JSON',
                 protocolVersion: '1.0',
             },
