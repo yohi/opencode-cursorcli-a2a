@@ -9,6 +9,8 @@ import express from 'express';
 import cors from 'cors';
 import crypto from 'node:crypto';
 import { executeCursorAgentStream } from './cursor-agent-service.js';
+import { createA2ARouter } from './a2a-routes.js';
+import { TaskStore } from './task-store.js';
 import { logger } from '../utils/logger.js';
 
 const app = express();
@@ -27,6 +29,16 @@ app.use(cors({
     }
 }));
 app.use(express.json());
+
+// A2A v1.0.0 準拠ルーター
+const taskStore = new TaskStore();
+const a2aRouter = createA2ARouter({
+    taskStore,
+    executeAgent: executeCursorAgentStream,
+    port: PORT,
+    host: HOST,
+});
+app.use(a2aRouter);
 
 // Simple Auth Middleware
 const authMiddleware = (req: express.Request, res: express.Response, next: express.NextFunction) => {
