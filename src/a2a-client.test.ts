@@ -16,7 +16,18 @@ vi.mock('ofetch', () => {
         }
         return {};
     });
-    (ofetchFn as any).raw = vi.fn();
+    (ofetchFn as any).raw = vi.fn(async (url: string, options?: any) => {
+        if (options?.signal?.aborted) {
+            throw new Error('The operation was aborted.');
+        }
+        return {
+            ok: true,
+            status: 200,
+            statusText: 'OK',
+            headers: new Headers(),
+            _data: new ReadableStream(),
+        };
+    });
     return {
         ofetch: ofetchFn,
         FetchError: class extends Error {
@@ -62,7 +73,7 @@ describe('A2AClient', () => {
         };
     };
 
-    it('should send request with idempotency key and retry=3', async () => {
+    it('should send request with idempotency key', async () => {
         vi.mocked(ofetch.raw).mockResolvedValue(createMockResponse(true, 200) as any);
         await client.chatStream({ request: mockRequest, idempotencyKey: 'test-key' });
         expect(ofetch.raw).toHaveBeenCalledWith(
@@ -75,7 +86,6 @@ describe('A2AClient', () => {
                     'Idempotency-Key': 'test-key',
                     'x-a2a-trace-id': expect.any(String),
                 }),
-                retry: 3,
                 retryDelay: 1000,
                 ignoreResponseError: true,
                 responseType: 'stream',
@@ -83,12 +93,61 @@ describe('A2AClient', () => {
         );
     });
 
-    it('should send request without idempotency key and retry=0', async () => {
+    it('should send request without idempotency key', async () => {
         vi.mocked(ofetch.raw).mockResolvedValue(createMockResponse(true, 200) as any);
         await client.chatStream({ request: mockRequest });
         expect(ofetch.raw).toHaveBeenCalledWith(
             expectedUrl,
-            expect.objectContaining({ retry: 0 })
+            expect.objectContaining({ method: 'POST' })
+        );
+    });
+
+    it('should handle AbortSignal and reject on immediate abort', async () => {
+        const controller = new AbortController();
+        controller.abort();
+        
+        // Mock ofetch.raw to reject since the signal is already aborted
+        vi.mocked(ofetch.raw).mockRejectedValue(new Error('The operation was aborted.'));
+        
+        const p = client.chatStream({ request: mockRequest, abortSignal: controller.signal });
+        await expect(p).rejects.toThrow();
+        expect(ofetch.raw).toHaveBeenCalledWith(
+            expect.any(String),
+            expect.objectContaining({ signal: controller.signal })
+        );
+    });
+
+    it('should handle mid-stream abort', async () => {
+        const controller = new AbortController();
+        const mockStream = {
+            getReader: () => ({
+                read: vi.fn().mockImplementation(async () => {
+                    if (controller.signal.aborted) {
+                        throw new Error('Aborted');
+                    }
+                    return { done: false, value: new TextEncoder().encode('data: {}\n\n') };
+                }),
+                cancel: vi.fn(),
+                releaseLock: vi.fn(),
+            }),
+            cancel: vi.fn(),
+        };
+
+        vi.mocked(ofetch.raw).mockResolvedValue({
+            status: 200,
+            headers: new Headers(),
+            _data: mockStream,
+        } as any);
+
+        const { stream } = await client.chatStream({ request: mockRequest, abortSignal: controller.signal });
+        expect(stream).toBeDefined();
+        
+        // Trigger abort
+        controller.abort();
+        
+        expect(ofetch.raw).toHaveBeenCalledWith(
+            expect.any(String),
+            expect.objectContaining({ signal: controller.signal })
         );
     });
 

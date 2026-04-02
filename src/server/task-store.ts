@@ -36,6 +36,7 @@ export class TaskStore {
         const now = Date.now();
         for (const [id, entry] of this.tasks.entries()) {
             if (now > entry.expiresAt) {
+                this.sessions.delete(entry.task.contextId);
                 this.tasks.delete(id);
             }
         }

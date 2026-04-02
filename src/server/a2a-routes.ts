@@ -66,8 +66,11 @@ export function createA2ARouter(options: A2ARouterOptions): Router {
         const artifactId = `art-${crypto.randomUUID()}`;
         let fullText = '';
 
+        const controller = new AbortController();
+        req.on('close', () => controller.abort());
+
         try {
-            const { sessionId } = await executeAgent(messageText, { model, sessionId: existingSessionId }, (event) => {
+            const { sessionId } = await executeAgent(messageText, { model, sessionId: existingSessionId, signal: controller.signal }, (event) => {
                 if (event.type === 'message' && event.content) {
                     fullText += event.content;
                 } else if (event.type === 'error') {
@@ -86,8 +89,14 @@ export function createA2ARouter(options: A2ARouterOptions): Router {
             });
             taskStore.updateStatus(task.id, 'TASK_STATE_COMPLETED');
         } catch (err) {
+            if (controller.signal.aborted) {
+                taskStore.updateStatus(task.id, 'TASK_STATE_ABORTED');
+                return;
+            }
             const errMsg = err instanceof Error ? err.message : String(err);
             taskStore.updateStatus(task.id, 'TASK_STATE_FAILED', errMsg);
+        } finally {
+            req.removeAllListeners('close');
         }
 
         const updated = taskStore.get(task.id);
@@ -135,7 +144,17 @@ export function createA2ARouter(options: A2ARouterOptions): Router {
         sendSSE(res, { task: taskStore.get(task.id)! });
 
         const controller = new AbortController();
-        res.on('close', () => controller.abort());
+        const cleanup = () => {
+            if (!controller.signal.aborted) {
+                controller.abort();
+                taskStore.updateStatus(task.id, 'TASK_STATE_ABORTED');
+                if (!res.writableEnded) {
+                    sendSSE(res, { task: taskStore.get(task.id)! });
+                    res.end();
+                }
+            }
+        };
+        res.on('close', cleanup);
 
         let fullText = '';
         try {

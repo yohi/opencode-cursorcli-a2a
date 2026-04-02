@@ -261,6 +261,12 @@ const server = app.listen(PORT, HOST, () => {
 
 const gracefulShutdown = (msg: string, err?: any) => {
     logger.error(msg, err);
+    
+    // Cleanup resources
+    if (taskStore) {
+        taskStore.destroy();
+    }
+
     server.close(() => {
         logger.info('Server closed');
         process.exit(1);

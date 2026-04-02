@@ -99,11 +99,16 @@ export function mapPromptToCursorRequest(
             }
         }
     } else if (isContinuingSession) {
-        // セッションはあるがカウントがない場合は、最後のユーザーメッセージを優先（安全策）
-        const lastUserMsg = [...prompt].reverse().find(m => m.role === 'user');
-        if (lastUserMsg) {
-            messageText = buildMessageText([lastUserMsg], { ...options, triggerConfig: undefined });
+        // セッションはあるがカウントがない場合は、最後の assistant メッセージを探し
+        // それ以降（ユーザーやツール）を全て送る
+        const lastAssistantIndex = [...prompt].reverse().findIndex(m => m.role === 'assistant');
+        if (lastAssistantIndex !== -1) {
+            // reverse しているので index を補正
+            const actualIndex = prompt.length - 1 - lastAssistantIndex;
+            const suffix = prompt.slice(actualIndex + 1);
+            messageText = buildMessageText(suffix, { ...options, triggerConfig: undefined });
         } else {
+            // assistant が一度も発言していない場合は全履歴を送る
             messageText = buildMessageText(prompt, options);
         }
     } else {

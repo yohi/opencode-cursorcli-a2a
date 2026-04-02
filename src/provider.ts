@@ -401,7 +401,10 @@ export class OpenCodeCursorA2AProvider {
 
                     controller.close();
                 } catch (error) {
-                    await self.sessionStore.update(sessionId!, { lastFinishReason: undefined });
+                    await self.sessionStore.update(sessionId!, {
+                        lastFinishReason: undefined,
+                        processedMessagesCount: 0
+                    });
                     controller.error(error);
                 }
             },
