@@ -9,9 +9,6 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import http from 'node:http';
-import https from 'node:https';
-import { URL } from 'node:url';
 
 const RETRY_STATUS_CODES = [408, 425, 429, 500, 502, 503, 504];
 
@@ -101,6 +98,7 @@ export class A2AClient {
             throw new APICallError({
                 message: 'A2AClient: Token cannot be sent over an insecure non-localhost connection.',
                 url: `${this.baseUrl}/projects`,
+                requestBodyValues: {},
                 isRetryable: false,
             });
         }
@@ -202,7 +200,7 @@ export class A2AClient {
                 const errMsg = `HTTP error ${status}: ${response.statusText}`;
                 Logger.warn(`[A2AClient] ${errMsg} at ${url}`);
                 
-                if (errMsg.includes('ECONNREFUSED') || status === 503) {
+                if (status === 503) {
                     Logger.warn(
                         `cursor-agent-a2a server connection refused at ${url}. ` +
                         `Is the server running? Try: cursor-agent-a2a start --port ${this.config.port}`
@@ -232,8 +230,11 @@ export class A2AClient {
             if (error instanceof APICallError) throw error;
 
             const errMsg = error instanceof Error ? error.message : String(error);
-            const isRetryable = error instanceof FetchError && 
-                (error.status !== undefined && RETRY_STATUS_CODES.includes(error.status));
+            const networkRetryableCodes = ['ETIMEDOUT', 'EAI_AGAIN', 'ECONNRESET', 'ECONNREFUSED'];
+            const isRetryable = error instanceof FetchError && (
+                (error.status !== undefined && RETRY_STATUS_CODES.includes(error.status)) ||
+                networkRetryableCodes.some(code => errMsg.includes(code))
+            );
 
             if (errMsg.includes('ECONNREFUSED')) {
                 Logger.warn(

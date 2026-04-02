@@ -785,7 +785,7 @@ export function createA2ARouter(options: A2ARouterOptions): Router {
     router.post('/message\\:send', async (req: Request, res: Response) => {
         const parsed = A2ASendMessageRequestSchema.safeParse(req.body);
         if (!parsed.success) {
-            return res.status(400).json({
+            res.status(400).json({
                 error: { code: 400, message: 'Invalid request', details: parsed.error.issues },
             });
         }
@@ -797,7 +797,7 @@ export function createA2ARouter(options: A2ARouterOptions): Router {
             .join('\n');
 
         if (!messageText.trim()) {
-            return res.status(400).json({
+            res.status(400).json({
                 error: { code: 400, message: 'Message must contain at least one text part' },
             });
         }
@@ -822,20 +822,21 @@ export function createA2ARouter(options: A2ARouterOptions): Router {
                 parts: [{ text: fullText }],
             });
             taskStore.updateStatus(task.id, 'TASK_STATE_COMPLETED');
+                return;
         } catch (err) {
             const errMsg = err instanceof Error ? err.message : String(err);
             taskStore.updateStatus(task.id, 'TASK_STATE_FAILED', errMsg);
         }
 
         const updated = taskStore.get(task.id);
-        return res.json({ task: updated });
+        res.json({ task: updated });
     });
 
     // SendStreamingMessage (§3.1.2, §11.3.1, §11.7)
     router.post('/message\\:stream', async (req: Request, res: Response) => {
         const parsed = A2ASendMessageRequestSchema.safeParse(req.body);
         if (!parsed.success) {
-            return res.status(400).json({
+            res.status(400).json({
                 error: { code: 400, message: 'Invalid request', details: parsed.error.issues },
             });
         }
@@ -847,7 +848,7 @@ export function createA2ARouter(options: A2ARouterOptions): Router {
             .join('\n');
 
         if (!messageText.trim()) {
-            return res.status(400).json({
+            res.status(400).json({
                 error: { code: 400, message: 'Message must contain at least one text part' },
             });
         }
@@ -914,6 +915,7 @@ export function createA2ARouter(options: A2ARouterOptions): Router {
                 });
                 res.end();
             }
+                return;
         } catch (err) {
             if (controller.signal.aborted || res.destroyed || !res.writable) {
                 if (!res.writableEnded) res.end();
@@ -940,7 +942,7 @@ export function createA2ARouter(options: A2ARouterOptions): Router {
     router.get('/tasks/:id', (req: Request, res: Response) => {
         const task = taskStore.get(req.params.id);
         if (!task) {
-            return res.status(404).json({
+            res.status(404).json({
                 error: {
                     code: 404,
                     status: 'NOT_FOUND',
@@ -948,7 +950,7 @@ export function createA2ARouter(options: A2ARouterOptions): Router {
                 },
             });
         }
-        return res.json({ task });
+        res.json({ task });
     });
 
     return router;
