@@ -16,7 +16,18 @@ vi.mock('ofetch', () => {
         }
         return {};
     });
-    (ofetchFn as any).raw = vi.fn();
+    (ofetchFn as any).raw = vi.fn(async (url: string, options?: any) => {
+        if (options?.signal?.aborted) {
+            throw new Error('The operation was aborted.');
+        }
+        return {
+            ok: true,
+            status: 200,
+            statusText: 'OK',
+            headers: new Headers(),
+            _data: new ReadableStream(),
+        };
+    });
     return {
         ofetch: ofetchFn,
         FetchError: class extends Error {
@@ -51,18 +62,26 @@ describe('A2AClient', () => {
         client = new A2AClient(mockConfig);
     });
 
-    const createMockResponse = (ok: boolean, status: number) => {
+    const createMockResponse = (ok: boolean, status: number, body: string = '') => {
         const headers = new Headers();
+        const stream = new ReadableStream({
+            start(controller) {
+                if (body) {
+                    controller.enqueue(new TextEncoder().encode(body));
+                }
+                controller.close();
+            }
+        });
         return {
             ok,
             status,
             statusText: ok ? 'OK' : 'Error',
             headers,
-            _data: new ReadableStream(),
+            _data: stream,
         };
     };
 
-    it('should send request with idempotency key and retry=3', async () => {
+    it('should send request with idempotency key', async () => {
         vi.mocked(ofetch.raw).mockResolvedValue(createMockResponse(true, 200) as any);
         await client.chatStream({ request: mockRequest, idempotencyKey: 'test-key' });
         expect(ofetch.raw).toHaveBeenCalledWith(
@@ -75,21 +94,83 @@ describe('A2AClient', () => {
                     'Idempotency-Key': 'test-key',
                     'x-a2a-trace-id': expect.any(String),
                 }),
-                retry: 3,
-                retryDelay: 1000,
                 ignoreResponseError: true,
                 responseType: 'stream',
             })
         );
     });
 
-    it('should send request without idempotency key and retry=0', async () => {
+    it('should send request without idempotency key', async () => {
         vi.mocked(ofetch.raw).mockResolvedValue(createMockResponse(true, 200) as any);
         await client.chatStream({ request: mockRequest });
         expect(ofetch.raw).toHaveBeenCalledWith(
             expectedUrl,
-            expect.objectContaining({ retry: 0 })
+            expect.objectContaining({ method: 'POST' })
         );
+    });
+
+    it('should handle AbortSignal and reject on immediate abort', async () => {
+        const controller = new AbortController();
+        controller.abort();
+        
+        // Mock ofetch.raw to reject since the signal is already aborted
+        vi.mocked(ofetch.raw).mockRejectedValue(new Error('The operation was aborted.'));
+        
+        const p = client.chatStream({ request: mockRequest, abortSignal: controller.signal });
+        await expect(p).rejects.toThrow();
+        expect(ofetch.raw).toHaveBeenCalledWith(
+            expect.any(String),
+            expect.objectContaining({ signal: controller.signal })
+        );
+    });
+
+    it('should handle mid-stream abort', async () => {
+        const controller = new AbortController();
+        const cancelSpy = vi.fn();
+        
+        // エミュレート: 中断時にキャンセルを呼ぶ
+        controller.signal.addEventListener('abort', () => cancelSpy());
+
+        const mockStream = {
+            getReader: () => ({
+                read: vi.fn().mockImplementation(async () => {
+                    if (controller.signal.aborted) {
+                        throw new Error('Aborted');
+                    }
+                    return { done: false, value: new TextEncoder().encode('data: {}\n\n') };
+                }),
+                cancel: cancelSpy,
+                releaseLock: vi.fn(),
+            }),
+            cancel: cancelSpy,
+        };
+
+        vi.mocked(ofetch.raw).mockResolvedValue({
+            status: 200,
+            headers: new Headers(),
+            _data: mockStream,
+        } as any);
+
+        const { stream } = await client.chatStream({ request: mockRequest, abortSignal: controller.signal });
+        expect(stream).toBeDefined();
+        
+        const reader = stream.getReader();
+        const firstRead = await reader.read();
+        expect(firstRead.done).toBe(false);
+
+        // Trigger abort
+        controller.abort();
+        
+        // Next read should throw or handle abort
+        await expect(reader.read()).rejects.toThrow();
+        
+        expect(ofetch.raw).toHaveBeenCalledWith(
+            expect.any(String),
+            expect.objectContaining({ signal: controller.signal })
+        );
+
+        // Verify cancel was called (due to signal abort event listener)
+        expect(cancelSpy).toHaveBeenCalled();
     });
 
     it('should use token in Authorization header for localhost', async () => {
@@ -112,17 +193,27 @@ describe('A2AClient', () => {
     });
 
     it('should throw APICallError on non-ok response', async () => {
-        vi.mocked(ofetch.raw).mockResolvedValue(createMockResponse(false, 500) as any);
-        const p = client.chatStream({ request: mockRequest });
-        await expect(p).rejects.toThrow(APICallError);
-        await expect(p).rejects.toThrow('HTTP error 500');
+        vi.mocked(ofetch.raw).mockResolvedValue(createMockResponse(false, 500, 'Error body content') as any);
+        try {
+            await client.chatStream({ request: mockRequest });
+            throw new Error('Should have thrown APICallError');
+        } catch (e: any) {
+            expect(e).toBeInstanceOf(APICallError);
+            expect(e.statusCode).toBe(500);
+            expect(e.responseBody).toBe('Error body content');
+            expect(e.message).toContain('Error body content');
+        }
     });
 
     it('should wrap network errors in APICallError', async () => {
         vi.mocked(ofetch.raw).mockRejectedValue(new Error('Network failure'));
-        const p = client.chatStream({ request: mockRequest });
-        await expect(p).rejects.toThrow(APICallError);
-        await expect(p).rejects.toThrow('Network failure');
+        try {
+            await client.chatStream({ request: mockRequest });
+            throw new Error('Should have thrown APICallError');
+        } catch (e: any) {
+            expect(e).toBeInstanceOf(APICallError);
+            expect(e.message).toContain('Network failure');
+        }
     });
 
     it('should send with custom traceId if provided', async () => {

@@ -68,7 +68,53 @@ export function mapPromptToCursorRequest(
     prompt: LanguageModelV1Prompt,
     options?: MapPromptOptions,
 ): CursorAgentMessageRequest {
-    const messageText = buildMessageText(prompt, options);
+    // セッション ID がある場合は、Cursor 側で履歴を保持しているため
+    // 前回の呼び出し以降に追加された差分メッセージのみを送信する（履歴の重複によるループ防止）
+    const isContinuingSession = !!options?.sessionId;
+    const processedCount = options?.processedMessagesCount ?? 0;
+    const hasHistory = isContinuingSession && processedCount > 0;
+    let messageText: string;
+
+    if (hasHistory) {
+        // 前回の呼び出し以降に追加されたメッセージ（差分）を抽出
+        const diff = prompt.slice(processedCount);
+        
+        // 差分の中から、ユーザーまたはツールのメッセージのみをフィルタリング
+        // (アシスタントのメッセージは Cursor 側で既に持っているはずなので、
+        //  重複送信によるフィードバックループを防止するために除外する)
+        const relevantDiff = diff.filter(m => m.role === 'user' || m.role === 'tool');
+
+        if (relevantDiff.length > 0) {
+            messageText = buildMessageText(relevantDiff, { ...options, triggerConfig: undefined });
+        } else {
+            // 差分にユーザーまたはツールのメッセージがない場合（アシスタントの返答のみの場合など）
+            // 最後のメッセージがユーザーまたはツールであればそれを再送し、そうでなければループ防止のため空文字を避ける
+            const lastMsg = prompt[prompt.length - 1];
+            if (lastMsg && (lastMsg.role === 'user' || lastMsg.role === 'tool')) {
+                messageText = buildMessageText([lastMsg], { ...options, triggerConfig: undefined });
+            } else {
+                // アシスタントのメッセージのみが追加された場合は、エージェントへの追加入力は不要。
+                // ただし A2A プロトコル上、空だとエラーになる可能性があるため最小限の指示にする。
+                messageText = "(empty)";
+            }
+        }
+    } else if (isContinuingSession) {
+        // セッションはあるがカウントがない場合は、最後の assistant メッセージを探し
+        // それ以降（ユーザーやツール）を全て送る
+        const lastAssistantIndex = [...prompt].reverse().findIndex(m => m.role === 'assistant');
+        if (lastAssistantIndex !== -1) {
+            // reverse しているので index を補正
+            const actualIndex = prompt.length - 1 - lastAssistantIndex;
+            const suffix = prompt.slice(actualIndex + 1);
+            messageText = buildMessageText(suffix, { ...options, triggerConfig: undefined });
+        } else {
+            // assistant が一度も発言していない場合は全履歴を送る
+            messageText = buildMessageText(prompt, options);
+        }
+    } else {
+        // 初回呼び出し、またはセッション未開始の場合は全履歴を送る
+        messageText = buildMessageText(prompt, options);
+    }
 
     // コンテキスト構築
     const context: Record<string, string> = {};
@@ -146,18 +192,20 @@ function buildMessageText(prompt: LanguageModelV1Prompt, options?: MapPromptOpti
             }
         } else if (msg.role === 'assistant') {
             const rawContent = msg.content;
-            const assistantContent = Array.isArray(rawContent) ? rawContent : [];
+            if (typeof rawContent === 'string') {
+                if (rawContent.length > 0) parts.push(`[Assistant]\n${rawContent}`);
+            } else if (Array.isArray(rawContent)) {
+                const textParts = rawContent
+                    .filter((p): p is { type: 'text'; text: string } => (p as { type: string }).type === 'text')
+                    .map(p => p.text);
+                if (textParts.length > 0) parts.push(`[Assistant]\n${textParts.join('\n')}`);
 
-            const textParts = assistantContent
-                .filter((p): p is { type: 'text'; text: string } => (p as { type: string }).type === 'text')
-                .map(p => p.text);
-            if (textParts.length > 0) parts.push(`[Assistant]\n${textParts.join('\n')}`);
-
-            const toolCalls = assistantContent.filter(
-                (p): p is ToolCallPart => (p as any).type === 'tool-call',
-            );
-            for (const tc of toolCalls) {
-                parts.push(`[Tool Call: ${tc.toolName}]\n${JSON.stringify(tc.input || tc.args, null, 2)}`);
+                const toolCalls = rawContent.filter(
+                    (p): p is ToolCallPart => (p as any).type === 'tool-call',
+                );
+                for (const tc of toolCalls) {
+                    parts.push(`[Tool Call: ${tc.toolName}]\n${JSON.stringify(tc.input || tc.args, null, 2)}`);
+                }
             }
         } else if (msg.role === 'tool') {
             for (const result of msg.content) {
@@ -185,9 +233,9 @@ function buildMessageText(prompt: LanguageModelV1Prompt, options?: MapPromptOpti
 export interface ExtendedFinishPart {
     type: 'finish';
     finishReason: LanguageModelV1FinishReason;
-    usage: {
-        inputTokens: { total: number };
-        outputTokens: { total: number };
+    usage?: {
+        inputTokens?: { total: number };
+        outputTokens?: { total: number };
     };
     inputRequired?: boolean;
     hasExposedTools?: boolean;
@@ -323,8 +371,8 @@ export class CursorA2AStreamMapper {
                     metadata = (event as any).metadata ?? {};
                 }
 
-                this._promptTokens = (metadata['promptTokens'] as number | undefined) ?? this._promptTokens;
-                this._completionTokens = (metadata['completionTokens'] as number | undefined) ?? this._completionTokens;
+                this._promptTokens = (metadata['promptTokens'] as number | undefined) ?? (metadata['inputTokens'] as number | undefined) ?? this._promptTokens;
+                this._completionTokens = (metadata['completionTokens'] as number | undefined) ?? (metadata['outputTokens'] as number | undefined) ?? this._completionTokens;
                 
                 // 2. 終了パーツの追加 (二重発行を防止)
                 if (this._lastFinishReason !== 'stop') {

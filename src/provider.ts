@@ -164,6 +164,7 @@ export class OpenCodeCursorA2AProvider {
         options: LanguageModelV1CallOptions,
         sessionId: string,
         sessionContextId?: string,
+        processedMessagesCount?: number,
     ): CursorAgentMessageRequest {
         const triggerConfig = this.resolvedOptions?.triggerConfig?.find(t => t.modelId === this.modelId);
 
@@ -176,6 +177,7 @@ export class OpenCodeCursorA2AProvider {
             cursorContext: this.resolvedOptions?.contextConfig,
             triggerConfig,
             modelId: this.modelId,
+            processedMessagesCount,
         };
 
         return mapPromptToCursorRequest(options.prompt, mapOptions);
@@ -246,7 +248,7 @@ export class OpenCodeCursorA2AProvider {
 
         // cursor-agent-a2a の sessionId は最初のレスポンスで返却される
         // 2 ターン目以降は session.contextId（= cursor-agent-a2a の sessionId）を渡す
-        const request = this.createRequest(options, sessionId, session.contextId);
+        const request = this.createRequest(options, sessionId, session.contextId, session.processedMessagesCount);
 
         const rawToolsInput = options.mode?.type === 'regular' ? options.mode.tools : undefined;
         const clientTools = Array.isArray(rawToolsInput)
@@ -275,7 +277,10 @@ export class OpenCodeCursorA2AProvider {
             responseStream = resp.stream;
             responseHeaders = resp.headers;
         } catch (error) {
-            await this.sessionStore.update(sessionId, { lastFinishReason: undefined });
+            await this.sessionStore.update(sessionId, { 
+                lastFinishReason: undefined,
+                processedMessagesCount: 0
+            });
             throw error;
         }
 
@@ -339,13 +344,24 @@ export class OpenCodeCursorA2AProvider {
                                         activeTextId = undefined;
                                     }
 
-                                    const finishPart = p as { finishReason: LanguageModelV1FinishReason; usage: { inputTokens: { total: number }; outputTokens: { total: number } }; providerMetadata?: Record<string, unknown> };
+                                    const finishPart = p as { 
+                                        finishReason: LanguageModelV1FinishReason; 
+                                        usage?: { 
+                                            inputTokens?: { total: number }; 
+                                            outputTokens?: { total: number } 
+                                        }; 
+                                        providerMetadata?: Record<string, unknown> 
+                                    };
+
                                     controller.enqueue({
                                         type: 'finish',
                                         finishReason: finishPart.finishReason,
                                         usage: {
-                                            promptTokens: finishPart.usage.inputTokens.total,
-                                            completionTokens: finishPart.usage.outputTokens.total,
+                                            promptTokens: finishPart.usage?.inputTokens?.total ?? 0,
+                                            completionTokens: finishPart.usage?.outputTokens?.total ?? 0,
+                                            // OpenCode UI 互換のためのネスト構造
+                                            inputTokens: { total: finishPart.usage?.inputTokens?.total ?? 0 },
+                                            outputTokens: { total: finishPart.usage?.outputTokens?.total ?? 0 },
                                         },
                                         ...(finishPart.providerMetadata ? { providerMetadata: finishPart.providerMetadata } : {}),
                                     } as unknown as LanguageModelV1StreamPart);
@@ -367,7 +383,12 @@ export class OpenCodeCursorA2AProvider {
                         controller.enqueue({
                             type: 'finish',
                             finishReason: 'stop',
-                            usage: { promptTokens: 0, completionTokens: 0 },
+                            usage: { 
+                                promptTokens: 0, 
+                                completionTokens: 0,
+                                inputTokens: { total: 0 },
+                                outputTokens: { total: 0 }
+                            },
                         } as unknown as LanguageModelV1StreamPart);
                     }
 
@@ -380,7 +401,10 @@ export class OpenCodeCursorA2AProvider {
 
                     controller.close();
                 } catch (error) {
-                    await self.sessionStore.update(sessionId!, { lastFinishReason: undefined });
+                    await self.sessionStore.update(sessionId!, {
+                        lastFinishReason: undefined,
+                        processedMessagesCount: 0
+                    });
                     controller.error(error);
                 }
             },

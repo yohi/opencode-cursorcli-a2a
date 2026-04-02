@@ -9,6 +9,8 @@ import express from 'express';
 import cors from 'cors';
 import crypto from 'node:crypto';
 import { executeCursorAgentStream } from './cursor-agent-service.js';
+import { createA2ARouter } from './a2a-routes.js';
+import { TaskStore } from './task-store.js';
 import { logger } from '../utils/logger.js';
 
 const app = express();
@@ -37,7 +39,8 @@ const authMiddleware = (req: express.Request, res: express.Response, next: expre
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
         logger.warn('Auth failed: Missing or invalid authorization header');
-        return res.status(401).json({ error: 'Unauthorized' });
+        res.status(401).json({ error: 'Unauthorized' });
+        return;
     }
 
     const providedToken = authHeader.substring(7); // "Bearer " is length 7
@@ -57,8 +60,21 @@ const authMiddleware = (req: express.Request, res: express.Response, next: expre
 
     logger.warn('Auth failed: Invalid token provided');
     res.status(401).json({ error: 'Unauthorized' });
+    return;
 };
 
+// A2A v1.0.0 準拠ルーター
+const taskStore = new TaskStore();
+const a2aRouter = createA2ARouter({
+    taskStore,
+    executeAgent: executeCursorAgentStream,
+    port: PORT,
+    host: HOST,
+    authMiddleware,
+});
+app.use(a2aRouter);
+
+// Auth middleware moved up
 // Health check
 app.get('/health', (_req: express.Request, res: express.Response) => {
     res.json({
@@ -245,6 +261,12 @@ const server = app.listen(PORT, HOST, () => {
 
 const gracefulShutdown = (msg: string, err?: any) => {
     logger.error(msg, err);
+    
+    // Cleanup resources
+    if (taskStore) {
+        taskStore.destroy();
+    }
+
     server.close(() => {
         logger.info('Server closed');
         process.exit(1);
