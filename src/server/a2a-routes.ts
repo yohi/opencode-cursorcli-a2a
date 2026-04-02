@@ -33,7 +33,7 @@ export function createA2ARouter(options: A2ARouterOptions): Router {
     });
 
     // SendMessage (§3.1.1, §11.3.1)
-    router.post('/message\\:send', requireAuth, async (req: Request, res: Response) => {
+    router.post('/message[:]send', requireAuth, async (req: Request, res: Response) => {
         const parsed = A2ASendMessageRequestSchema.safeParse(req.body);
         if (!parsed.success) {
             res.status(400).json({
@@ -105,7 +105,7 @@ export function createA2ARouter(options: A2ARouterOptions): Router {
     });
 
     // SendStreamingMessage (§3.1.2, §11.3.1, §11.7)
-    router.post('/message\\:stream', requireAuth, async (req: Request, res: Response) => {
+    router.post('/message[:]stream', requireAuth, async (req: Request, res: Response) => {
         const parsed = A2ASendMessageRequestSchema.safeParse(req.body);
         if (!parsed.success) {
             res.status(400).json({

@@ -171,8 +171,6 @@ export class A2AClient {
                 headers['Authorization'] = `Bearer ${token}`;
             }
 
-            const retryCount = idempotencyKey ? 3 : 0;
-
             const redactedRequest = {
                 model: request.model ?? '(default)',
                 traceId: finalTraceId,
@@ -196,7 +194,31 @@ export class A2AClient {
 
             const status = response.status;
             if (status >= 400) {
-                const errMsg = `HTTP error ${status}: ${response.statusText}`;
+                let responseBody: string | undefined;
+                try {
+                    // responseType: 'stream' なので、ボディをテキストとして読み取る
+                    const data = response._data;
+                    if (data instanceof ReadableStream) {
+                        const reader = data.getReader();
+                        const decoder = new TextDecoder();
+                        let result = '';
+                        while (true) {
+                            const { done, value } = await reader.read();
+                            if (done) break;
+                            result += decoder.decode(value, { stream: true });
+                        }
+                        result += decoder.decode();
+                        responseBody = result;
+                    } else if (typeof data === 'string') {
+                        responseBody = data;
+                    } else if (data) {
+                        responseBody = JSON.stringify(data);
+                    }
+                } catch (e) {
+                    Logger.warn(`[A2AClient] Failed to read error response body: ${e}`);
+                }
+
+                const errMsg = `HTTP error ${status}: ${response.statusText}${responseBody ? ` - ${responseBody}` : ''}`;
                 Logger.warn(`[A2AClient] ${errMsg} at ${url}`);
                 
                 if (status === 503) {
@@ -206,11 +228,18 @@ export class A2AClient {
                     );
                 }
 
+                const responseHeaders: Record<string, string> = {};
+                response.headers.forEach((value, key) => {
+                    responseHeaders[key] = value;
+                });
+
                 throw new APICallError({
                     message: errMsg,
                     url,
                     requestBodyValues: request,
                     statusCode: status,
+                    responseHeaders,
+                    responseBody,
                     isRetryable: RETRY_STATUS_CODES.includes(status),
                 });
             }

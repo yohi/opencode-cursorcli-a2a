@@ -62,14 +62,22 @@ describe('A2AClient', () => {
         client = new A2AClient(mockConfig);
     });
 
-    const createMockResponse = (ok: boolean, status: number) => {
+    const createMockResponse = (ok: boolean, status: number, body: string = '') => {
         const headers = new Headers();
+        const stream = new ReadableStream({
+            start(controller) {
+                if (body) {
+                    controller.enqueue(new TextEncoder().encode(body));
+                }
+                controller.close();
+            }
+        });
         return {
             ok,
             status,
             statusText: ok ? 'OK' : 'Error',
             headers,
-            _data: new ReadableStream(),
+            _data: stream,
         };
     };
 
@@ -119,6 +127,7 @@ describe('A2AClient', () => {
 
     it('should handle mid-stream abort', async () => {
         const controller = new AbortController();
+        const cancelSpy = vi.fn();
         const mockStream = {
             getReader: () => ({
                 read: vi.fn().mockImplementation(async () => {
@@ -127,10 +136,10 @@ describe('A2AClient', () => {
                     }
                     return { done: false, value: new TextEncoder().encode('data: {}\n\n') };
                 }),
-                cancel: vi.fn(),
+                cancel: cancelSpy,
                 releaseLock: vi.fn(),
             }),
-            cancel: vi.fn(),
+            cancel: cancelSpy,
         };
 
         vi.mocked(ofetch.raw).mockResolvedValue({
@@ -142,8 +151,15 @@ describe('A2AClient', () => {
         const { stream } = await client.chatStream({ request: mockRequest, abortSignal: controller.signal });
         expect(stream).toBeDefined();
         
+        const reader = stream.getReader();
+        const firstRead = await reader.read();
+        expect(firstRead.done).toBe(false);
+
         // Trigger abort
         controller.abort();
+        
+        // Next read should throw or handle abort
+        await expect(reader.read()).rejects.toThrow();
         
         expect(ofetch.raw).toHaveBeenCalledWith(
             expect.any(String),
@@ -171,10 +187,16 @@ describe('A2AClient', () => {
     });
 
     it('should throw APICallError on non-ok response', async () => {
-        vi.mocked(ofetch.raw).mockResolvedValue(createMockResponse(false, 500) as any);
+        vi.mocked(ofetch.raw).mockResolvedValue(createMockResponse(false, 500, 'Error body content') as any);
         const p = client.chatStream({ request: mockRequest });
         await expect(p).rejects.toThrow(APICallError);
-        await expect(p).rejects.toThrow('HTTP error 500');
+        try {
+            await p;
+        } catch (e: any) {
+            expect(e.statusCode).toBe(500);
+            expect(e.responseBody).toBe('Error body content');
+            expect(e.message).toContain('Error body content');
+        }
     });
 
     it('should wrap network errors in APICallError', async () => {

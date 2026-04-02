@@ -102,9 +102,8 @@ export class TaskStore {
         const artifact = task.artifacts!.find((a) => a.artifactId === artifactId);
         if (!artifact || artifact.parts.length === 0) return undefined;
         const lastPart = artifact.parts[artifact.parts.length - 1];
-        if (lastPart.text !== undefined) {
-            lastPart.text += text;
-        }
+        if (lastPart.text === undefined) return undefined;
+        lastPart.text += text;
         return structuredClone(task);
     }
 
