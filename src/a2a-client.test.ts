@@ -207,9 +207,13 @@ describe('A2AClient', () => {
 
     it('should wrap network errors in APICallError', async () => {
         vi.mocked(ofetch.raw).mockRejectedValue(new Error('Network failure'));
-        const p = client.chatStream({ request: mockRequest });
-        await expect(p).rejects.toThrow(APICallError);
-        await expect(p).rejects.toThrow('Network failure');
+        try {
+            await client.chatStream({ request: mockRequest });
+            throw new Error('Should have thrown APICallError');
+        } catch (e: any) {
+            expect(e).toBeInstanceOf(APICallError);
+            expect(e.message).toContain('Network failure');
+        }
     });
 
     it('should send with custom traceId if provided', async () => {

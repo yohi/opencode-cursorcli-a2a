@@ -70,7 +70,8 @@ export function createA2ARouter(options: A2ARouterOptions): Router {
         let fullText = '';
 
         const controller = new AbortController();
-        req.on('close', () => controller.abort());
+        const abortHandler = () => controller.abort();
+        req.on('close', abortHandler);
 
         try {
             const { sessionId } = await executeAgent(messageText, { model, sessionId: existingSessionId, signal: controller.signal }, (event) => {
@@ -99,7 +100,7 @@ export function createA2ARouter(options: A2ARouterOptions): Router {
             const errMsg = err instanceof Error ? err.message : String(err);
             taskStore.updateStatus(task.id, 'TASK_STATE_FAILED', errMsg);
         } finally {
-            req.removeAllListeners('close');
+            req.removeListener('close', abortHandler);
         }
 
         const updated = taskStore.get(task.id);
@@ -237,6 +238,8 @@ export function createA2ARouter(options: A2ARouterOptions): Router {
                 },
             });
             res.end();
+        } finally {
+            res.removeListener('close', cleanup);
         }
     });
 
